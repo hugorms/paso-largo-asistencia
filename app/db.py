@@ -130,6 +130,11 @@ def init():
     PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
     with tx() as c:
         c.executescript(SCHEMA)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(employees)")}
+        if "face_at" not in cols:
+            # Fecha en que se registró el rostro: desde ahí cuenta la asistencia
+            c.execute("ALTER TABLE employees ADD COLUMN face_at TEXT")
+            c.execute("UPDATE employees SET face_at=substr(created_at,1,10) WHERE photo IS NOT NULL")
         if not c.execute("SELECT 1 FROM users").fetchone():
             c.execute("INSERT INTO users(username, full_name, password_hash, role) VALUES (?,?,?,?)",
                       ("admin", "Administrador", hash_password(os.environ.get("ADMIN_PASSWORD") or "admin123"), "admin"))

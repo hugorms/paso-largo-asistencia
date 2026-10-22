@@ -72,17 +72,18 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
     for lv in db.q("SELECT * FROM leaves WHERE date_to >= ? AND date_from <= ?", (start.isoformat(), end.isoformat())):
         leaves[lv["employee_id"]].append(lv)
     min_gap = timedelta(minutes=int(db.get_setting("min_gap_minutes", "2")))
-    # Sin fecha de ingreso se cuenta desde su primera marca (o desde que se registró): no hay faltas
-    # en días anteriores a que la persona existiera en el equipo o en el sistema.
+    # La asistencia cuenta desde que tiene rostro registrado (o desde su primera marca), y no antes de
+    # su fecha de ingreso: quien aún no tiene rostro no acumula faltas.
     first_mark = {r["employee_no"]: r["d"][:10] for r in db.q(
         f"SELECT employee_no, MIN(event_time) AS d FROM events WHERE valid=1 AND employee_no IN ({ph}) GROUP BY employee_no",
         nos)}
 
     rows = []
     for e in emps:
-        hire = parse_date(e["hire_date"]) or min(
-            filter(None, (parse_date(first_mark.get(e["employee_no"])), parse_date((e["created_at"] or "")[:10]))),
-            default=None)
+        hire = min(filter(None, (parse_date(first_mark.get(e["employee_no"])), parse_date(e["face_at"]))), default=None)
+        if not hire:
+            continue  # sin rostro ni marcas todavía
+        hire = max(hire, parse_date(e["hire_date"]) or hire)
         workdays = {int(x) for x in (e["days"] or "").split(",") if x.strip()}
         for d in _daterange(start, end):
             if hire and d < hire:

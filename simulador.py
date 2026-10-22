@@ -99,7 +99,7 @@ def count():
 @app.post("/ISAPI/AccessControl/UserInfo/Search")
 async def search(request: Request):
     c = (await request.json())["UserInfoSearchCond"]
-    users = list(state["users"].values())
+    users = [dict(u, numOfFace=1 if u["employeeNo"] in state["faces"] else 0) for u in state["users"].values()]
     if c.get("EmployeeNoList"):
         wanted = {x["employeeNo"] for x in c["EmployeeNoList"]}
         users = [u for u in users if u["employeeNo"] in wanted]

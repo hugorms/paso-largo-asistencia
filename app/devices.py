@@ -118,6 +118,29 @@ def import_unknown_users(dev):
     return len(missing)
 
 
+def sync_faces(dev):
+    """Da de alta a quien ya tiene rostro registrado en el equipo (aunque aún no marque) y anota
+    desde cuándo tiene rostro. Quien no tiene rostro no cuenta asistencia."""
+    users = [u for u in client(dev).search_users() if int(u.get("numOfFace") or 0) > 0]
+    today = datetime.now().date().isoformat()
+    sched = db.q1("SELECT id FROM schedules ORDER BY id")
+    new = []
+    for u in users:
+        no = str(u.get("employeeNo") or "").strip()
+        if not no:
+            continue
+        if db.q1("SELECT 1 FROM employees WHERE employee_no=?", (no,)):
+            db.ex("UPDATE employees SET face_at=? WHERE employee_no=? AND face_at IS NULL", (today, no))
+        else:
+            db.ex("INSERT INTO employees(employee_no, name, gender, schedule_id, face_at) VALUES (?,?,?,?,?)",
+                  (no, u.get("name") or f"Empleado {no}", u.get("gender", "unknown"),
+                   sched["id"] if sched else None, today))
+            new.append(no)
+    if new:
+        db.audit("sistema", "empleados con rostro importados del equipo", f"{dev['name']}: {', '.join(new)}")
+    return len(new)
+
+
 def check_clock(dev, max_drift=120):
     """Si el reloj del equipo difiere más de max_drift segundos de esta PC, lo corrige."""
     c = client(dev)
@@ -197,6 +220,7 @@ class Poller(threading.Thread):
         self.wake = threading.Event()
         self.listeners = {}
         self.clock_checked = {}
+        self.faces_checked = {}
 
     def _ensure_listeners(self, devs):
         for dev in devs:
@@ -222,6 +246,10 @@ class Poller(threading.Thread):
                     if time.time() - self.clock_checked.get(dev["id"], 0) > 600:
                         self.clock_checked[dev["id"]] = time.time()
                         check_clock(dev)
+                    if time.time() - self.faces_checked.get(dev["id"], 0) > 60:
+                        self.faces_checked[dev["id"]] = time.time()
+                        if sync_faces(dev):
+                            log.info("%s: empleados con rostro nuevos importados", dev["name"])
                     n = pull_events(dev)
                     if n:
                         log.info("%s: %d eventos nuevos", dev["name"], n)

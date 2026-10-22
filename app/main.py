@@ -243,13 +243,14 @@ async def employee_save(request: Request):
         db.ex("""UPDATE employees SET employee_no=?, name=?, document=?, department_id=?, position=?, email=?,
                  phone=?, gender=?, schedule_id=?, hire_date=?, active=? WHERE id=?""", vals + [eid])
         if photo_name:
-            db.ex("UPDATE employees SET photo=? WHERE id=?", (photo_name, eid))
+            db.ex("UPDATE employees SET photo=?, face_at=COALESCE(face_at, ?) WHERE id=?",
+                  (photo_name, date.today().isoformat(), eid))
             if old["photo"]:
                 (db.PHOTOS_DIR / old["photo"]).unlink(missing_ok=True)
     else:
         eid = db.ex("""INSERT INTO employees(employee_no, name, document, department_id, position, email, phone,
-                       gender, schedule_id, hire_date, active, photo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    vals + [photo_name])
+                       gender, schedule_id, hire_date, active, photo, face_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    vals + [photo_name, date.today().isoformat() if photo_name else None])
     db.audit(u["username"], "guardar empleado", f"{no} {f['name']}")
     emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
     if emp["active"]:
