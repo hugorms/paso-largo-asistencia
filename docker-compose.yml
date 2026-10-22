@@ -7,8 +7,13 @@ services:
     environment:
       - TZ=${TZ:-America/Caracas}
       - ASISTENCIA_DATA=/data
+      # Contraseña del usuario admin en la primera instalación (si se deja vacía: admin123)
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     expose:
       - "8000"
+    # Sin dominio (solo red interna): descomenta para abrir http://IP-DEL-SERVIDOR:8000
+    # ports:
+    #   - "8000:8000"
     volumes:
       - paso-largo-datos:/data
 

@@ -81,7 +81,8 @@ async def form(request):
 # ------------------------------------------------------------------ login
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", {"error": None, "company": db.get_setting("company")})
+    return templates.TemplateResponse(request, "login.html", {"error": None, "company": db.get_setting("company"),
+                                                              "flashes": request.session.pop("flash", [])})
 
 
 @app.post("/login")
@@ -415,6 +416,37 @@ async def config_save(request: Request, what: str):
     db.audit(u["username"], f"configuración: {what}", str({k: v for k, v in f.items() if k != "password"}))
     flash(request, "Cambios guardados.")
     return back("/configuracion")
+
+
+@app.get("/respaldo")
+def backup_download(request: Request):
+    u = user(request, "admin")
+    data = db.backup_zip()
+    db.audit(u["username"], "respaldo descargado", f"{len(data) // 1024} KB")
+    name = f"respaldo-paso-largo-{datetime.now():%Y%m%d-%H%M}.zip"
+    return Response(data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/respaldo/restaurar")
+async def backup_restore(request: Request):
+    u = user(request, "admin")
+    f = await request.form()
+    up = f.get("archivo")
+    if not up or not getattr(up, "filename", ""):
+        flash(request, "Elige el archivo .zip del respaldo.", "danger")
+        return back("/configuracion")
+    try:
+        emps, evs = await run_in_threadpool(db.restore_zip, await up.read())
+    except ValueError as e:
+        flash(request, str(e), "danger")
+        return back("/configuracion")
+    db.audit(u["username"], "respaldo restaurado", f"{up.filename}: {emps} empleados, {evs} eventos")
+    poller.wake.set()
+    # Los usuarios ahora son los del respaldo: se pide entrar de nuevo
+    request.session.clear()
+    flash(request, f"Respaldo restaurado: {emps} empleados y {evs} marcaciones. Entra con un usuario del respaldo.")
+    return back("/login")
 
 
 # ------------------------------------------------------------------ permisos / justificaciones

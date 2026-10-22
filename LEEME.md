@@ -70,7 +70,15 @@ que genera marcaciones al azar. Agrégalo como dispositivo para ver el sistema f
 1. En Dokploy crea un servicio **Compose** (o **Application** con build type *Dockerfile*) apuntando a este repositorio, rama `main`.
 2. En **Domains** asigna tu dominio al puerto **8000** (servicio `web`).
 3. Despliega. Los datos (base de datos, fotos y clave de sesión) quedan en el volumen `paso-largo-datos` montado en `/data`, así que no se pierden al volver a desplegar.
-4. Entra con `admin / admin123` y cambia la contraseña de inmediato.
+4. Antes del primer despliegue define la variable `ADMIN_PASSWORD` en Dokploy (Environment) para no dejar `admin123` expuesto. Si no la defines, entra con `admin / admin123` y cámbiala de inmediato.
+
+### Pasar los datos de la laptop al servidor
+1. En la laptop: **Horarios y ajustes → Respaldo y migración → Descargar respaldo** (se descarga un .zip con base de datos y fotos).
+2. Cierra Paso Largo en la laptop para que no siga leyendo el terminal.
+3. En el servidor: entra como admin, **Horarios y ajustes → Restaurar**, elige el .zip. Luego entra con tus usuarios de siempre.
+4. En **Dispositivos** actualiza la IP del terminal si cambió en la nueva ubicación.
+
+Ese mismo botón sirve para sacar respaldos periódicos; además conviene activar los backups del volumen en Dokploy.
 
 **Importante:** el servidor de Dokploy tiene que poder llegar al terminal Hikvision (por ejemplo `192.168.1.19`).
 Si Dokploy está en un VPS en internet, no verá la red local del terminal: hace falta una VPN (WireGuard, Tailscale)

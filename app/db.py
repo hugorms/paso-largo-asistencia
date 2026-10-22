@@ -1,4 +1,5 @@
 import hashlib
+import io
 import os
 import secrets
 import sqlite3
@@ -131,7 +132,7 @@ def init():
         c.executescript(SCHEMA)
         if not c.execute("SELECT 1 FROM users").fetchone():
             c.execute("INSERT INTO users(username, full_name, password_hash, role) VALUES (?,?,?,?)",
-                      ("admin", "Administrador", hash_password("admin123"), "admin"))
+                      ("admin", "Administrador", hash_password(os.environ.get("ADMIN_PASSWORD") or "admin123"), "admin"))
         if not c.execute("SELECT 1 FROM schedules").fetchone():
             c.execute("INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days) "
                       "VALUES ('Oficina L-V','08:00','17:00',10,60,'1,2,3,4,5')")
@@ -143,3 +144,64 @@ def init():
     if not key_file.exists():
         key_file.write_text(secrets.token_hex(32))
     return key_file.read_text().strip()
+
+
+BACKUP_DB = "asistencia.db"
+
+
+def backup_zip() -> bytes:
+    """Respaldo completo (base de datos + fotos) en un .zip, sin detener el programa."""
+    import tempfile
+    import zipfile
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / BACKUP_DB
+        src, dst = connect(), sqlite3.connect(copy)
+        try:
+            src.backup(dst)  # copia consistente aunque haya escrituras en curso (WAL)
+        finally:
+            dst.close()
+            src.close()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(copy, BACKUP_DB)
+            for f in PHOTOS_DIR.glob("*"):
+                if f.is_file():
+                    z.write(f, f"fotos/{f.name}")
+        return buf.getvalue()
+
+
+def restore_zip(raw: bytes):
+    """Reemplaza la base de datos y las fotos por las de un respaldo. Devuelve (empleados, eventos)."""
+    import tempfile
+    import zipfile
+    try:
+        z = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        raise ValueError("El archivo no es un .zip válido.")
+    if BACKUP_DB not in z.namelist():
+        raise ValueError("El .zip no contiene asistencia.db (¿es un respaldo de Paso Largo?).")
+    with tempfile.TemporaryDirectory() as tmp:
+        new = Path(tmp) / BACKUP_DB
+        new.write_bytes(z.read(BACKUP_DB))
+        src = sqlite3.connect(new)
+        try:
+            tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"employees", "events", "users"} <= tables:
+                raise ValueError("La base de datos del respaldo no es de Paso Largo.")
+            counts = (src.execute("SELECT COUNT(*) FROM employees").fetchone()[0],
+                      src.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+            with _lock:
+                dst = connect()
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
+        except sqlite3.DatabaseError as e:
+            raise ValueError(f"La base de datos del respaldo está dañada: {e}")
+        finally:
+            src.close()
+    for name in z.namelist():
+        if name.startswith("fotos/") and not name.endswith("/"):
+            (PHOTOS_DIR / Path(name).name).write_bytes(z.read(name))
+    init()  # aplica columnas/tablas nuevas si el respaldo es de una versión anterior
+    return counts
