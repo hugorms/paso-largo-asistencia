@@ -1,0 +1,8 @@
+.git
+.venv
+venv
+datos
+__pycache__
+*.pyc
+*.db
+secret.key

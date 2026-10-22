@@ -1,0 +1,16 @@
+# Despliegue en Dokploy: crear un servicio "Compose" apuntando a este repositorio.
+# El dominio se asigna desde Dokploy (pestaña Domains) hacia el puerto 8000 del servicio "web".
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/Caracas}
+      - ASISTENCIA_DATA=/data
+    expose:
+      - "8000"
+    volumes:
+      - paso-largo-datos:/data
+
+volumes:
+  paso-largo-datos:

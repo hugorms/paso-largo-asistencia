@@ -64,3 +64,16 @@ que genera marcaciones al azar. Agrégalo como dispositivo para ver el sistema f
   (en la web del equipo: *Configuración → Red → Servicios de red*, o en SADP).
 - **Rostro rechazado:** la foto debe mostrar un solo rostro de frente, bien iluminado; prueba con otra foto.
 - **Horas de las marcas desfasadas:** usa *Sincronizar hora* y revisa la zona horaria del dispositivo.
+
+## Despliegue en Dokploy (Docker)
+
+1. En Dokploy crea un servicio **Compose** (o **Application** con build type *Dockerfile*) apuntando a este repositorio, rama `main`.
+2. En **Domains** asigna tu dominio al puerto **8000** (servicio `web`).
+3. Despliega. Los datos (base de datos, fotos y clave de sesión) quedan en el volumen `paso-largo-datos` montado en `/data`, así que no se pierden al volver a desplegar.
+4. Entra con `admin / admin123` y cambia la contraseña de inmediato.
+
+**Importante:** el servidor de Dokploy tiene que poder llegar al terminal Hikvision (por ejemplo `192.168.1.19`).
+Si Dokploy está en un VPS en internet, no verá la red local del terminal: hace falta una VPN (WireGuard, Tailscale)
+entre el VPS y la red del terminal, o instalar Dokploy en una PC/servidor dentro de esa misma red.
+
+La zona horaria se define con la variable `TZ` (por defecto `America/Caracas`). Usa una sola réplica: el lector de eventos del equipo no debe duplicarse.
