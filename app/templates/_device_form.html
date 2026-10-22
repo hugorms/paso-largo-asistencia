@@ -1,0 +1,15 @@
+<form method="post" action="/dispositivos/guardar" class="row g-3">
+  <input type="hidden" name="id" value="{{ dv.id or '' }}">
+  <div class="col-md-4"><label class="form-label">Nombre</label><input name="name" value="{{ dv.name or '' }}" class="form-control" required placeholder="Puerta principal"></div>
+  <div class="col-md-4"><label class="form-label">IP del equipo</label><input name="host" value="{{ dv.host or '' }}" class="form-control mono" required placeholder="192.168.1.19"></div>
+  <div class="col-6 col-md-2"><label class="form-label">Puerto</label><input name="port" type="number" value="{{ dv.port or 80 }}" class="form-control mono"></div>
+  <div class="col-6 col-md-2 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="https" value="1" {{ 'checked' if dv.https }}><label class="form-check-label">HTTPS</label></div></div>
+  <div class="col-md-4"><label class="form-label">Usuario del equipo</label><input name="username" value="{{ dv.username or 'admin' }}" class="form-control" required></div>
+  <div class="col-md-4"><label class="form-label">Contraseña</label><input name="password" type="password" class="form-control" {{ '' if dv.id else 'required' }} autocomplete="new-password" placeholder="{{ 'Dejar vacío para no cambiar' if dv.id else '' }}"></div>
+  <div class="col-md-4"><label class="form-label">Zona horaria</label><input value="UTC{{ local_offset() }} (la de esta PC)" class="form-control" disabled><div class="form-text">La hora del equipo se corrige sola.</div></div>
+  <div class="col-md-6"><label class="form-label">Tipo de marcación</label><select name="direction" class="form-select">
+    {% for v,l in [('ambos','Entrada y salida (1.ª marca = entrada, última = salida)'),('entrada','Solo entrada'),('salida','Solo salida')] %}<option value="{{ v }}" {{ 'selected' if dv.direction == v }}>{{ l }}</option>{% endfor %}</select></div>
+  <div class="col-6 col-md-2"><label class="form-label">N° de puerta</label><input name="door_no" type="number" value="{{ dv.door_no or 1 }}" class="form-control mono"></div>
+  <div class="col-6 col-md-4 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="active" value="1" {{ 'checked' if dv.active or not dv.id }}><label class="form-check-label">Activo</label></div></div>
+  <div class="col-12 form-actions mt-0"><button class="btn btn-primary"><i class="bi bi-plug"></i> Guardar y probar conexión</button></div>
+</form>

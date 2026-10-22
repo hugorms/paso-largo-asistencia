@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% block title %}Marcaciones{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Marcaciones</h1><div class="sub">Todos los eventos recibidos de los equipos</div></div></div>
+<div class="card">
+<div class="card-body border-bottom py-3">
+<form class="row g-2 align-items-end">
+  <div class="col-6 col-md-2"><label class="form-label">Desde</label><input type="date" name="desde" value="{{ desde }}" class="form-control"></div>
+  <div class="col-6 col-md-2"><label class="form-label">Hasta</label><input type="date" name="hasta" value="{{ hasta }}" class="form-control"></div>
+  <div class="col-md-3"><label class="form-label">Empleado</label><select name="emp" class="form-select"><option value="">Todos</option>{% for e in emps %}<option value="{{ e.employee_no }}" {{ 'selected' if emp == e.employee_no }}>{{ e.name }}</option>{% endfor %}</select></div>
+  <div class="col-md-2"><label class="form-label">Equipo</label><select name="dev" class="form-select"><option value="">Todos</option>{% for dv in devs %}<option value="{{ dv.id }}" {{ 'selected' if dev|string == dv.id|string }}>{{ dv.name }}</option>{% endfor %}</select></div>
+  <div class="col-md-2"><div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="todos" value="1" id="todos" {{ 'checked' if todos }}><label class="form-check-label" for="todos">Incluir eventos de puerta</label></div></div>
+  <div class="col-md-1"><button class="btn btn-primary w-100">Ver</button></div>
+</form>
+</div>
+<div class="table-responsive"><table class="table table-hover align-middle">
+<thead><tr><th>Fecha y hora</th><th>N°</th><th>Empleado</th><th>Evento</th><th>Verificación</th><th>Tipo</th><th>Equipo</th><th>Foto</th></tr></thead>
+<tbody>
+{% for ev in rows %}
+<tr><td class="mono">{{ ev.event_time[8:10] }}/{{ ev.event_time[5:7] }}/{{ ev.event_time[:4] }} {{ ev.event_time[11:19] }}</td><td class="mono text-secondary">{{ ev.employee_no or '—' }}</td><td>{{ ev.emp_name or ev.name or '—' }}</td>
+<td><span class="badge text-bg-{{ 'success' if ev.valid else 'secondary' }}">{{ 'Marca manual' if ev.source == 'manual' else minor_names.get(ev.minor, 'Evento ' ~ ev.major ~ '/' ~ ev.minor) }}</span></td>
+<td>{{ {'face':'Rostro','card':'Tarjeta','fingerPrint':'Huella','manual':'Manual','invalid':'—'}.get(ev.verify_mode, ev.verify_mode or '—') }}</td><td>{{ {'checkIn':'Entrada','checkOut':'Salida','breakOut':'Salida descanso','breakIn':'Regreso descanso'}.get(ev.attendance_status, ev.attendance_status or '—') }}</td>
+<td>{{ ev.device or 'Manual' }}</td>
+<td>{% if ev.picture_url %}<a href="/eventos/{{ ev.id }}/foto" target="_blank" class="btn btn-sm btn-outline-secondary btn-icon" title="Ver foto"><i class="bi bi-image"></i></a>{% else %}—{% endif %}</td></tr>
+{% else %}<tr><td colspan="8" class="empty"><i class="bi bi-clock-history"></i>Sin marcaciones en este rango.</td></tr>{% endfor %}
+</tbody></table></div></div>
+{% if rows|length == 1000 %}<p class="small text-secondary mt-2">Se muestran las 1000 más recientes; acota el rango.</p>{% endif %}
+{% endblock %}

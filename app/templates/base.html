@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Asistencia{% endblock %} · Paso Largo</title>
+<link href="/static/bootstrap.min.css" rel="stylesheet">
+<link href="/static/bootstrap-icons.min.css" rel="stylesheet">
+<link href="/static/tema.css?v=8" rel="stylesheet">
+</head>
+<body>
+{% macro brand() %}
+<div class="brand"><div class="brand-logo"><i class="bi bi-person-walking"></i></div>
+  <div><div class="brand-name">Paso Largo</div><div class="brand-sub">{{ company if company and company != 'Paso Largo' else 'Control de asistencia' }}</div></div></div>
+{% endmacro %}
+<div class="topbar">{{ brand() }}<button type="button" onclick="toggleNav()" aria-label="Menú"><i class="bi bi-list"></i></button></div>
+<div class="backdrop" id="backdrop" onclick="toggleNav()"></div>
+<div class="app">
+  <nav class="sidebar" id="sidebar">
+    {{ brand() }}
+    {% set sections = [
+      ('Diario', [('/', 'speedometer2', 'Panel', None), ('/asistencia', 'calendar-check', 'Asistencia del día', None),
+                  ('/eventos', 'list-ul', 'Marcaciones', None), ('/reportes', 'file-earmark-bar-graph', 'Reportes', None)]),
+      ('Personal', [('/empleados', 'people', 'Empleados', None), ('/permisos', 'clipboard-check', 'Permisos', ['admin','supervisor'])]),
+      ('Sistema', [('/dispositivos', 'cpu', 'Dispositivos', None), ('/configuracion', 'sliders', 'Horarios y ajustes', ['admin','supervisor']),
+                   ('/usuarios', 'shield-lock', 'Usuarios', ['admin'])]),
+    ] %}
+    <div class="side-nav">
+    {% for title, items in sections %}
+      <div class="nav-section">{{ title }}</div>
+      {% for href, icon, label, rl in items %}{% if not rl or u.role in rl %}
+      <a href="{{ href }}" class="{{ 'active' if (path == href or (href != '/' and path.startswith(href))) }}"><i class="bi bi-{{ icon }}"></i>{{ label }}</a>
+      {% endif %}{% endfor %}
+    {% endfor %}
+    </div>
+    <div class="side-user">
+      <div class="avatar-i">{{ (u.full_name or u.username)[:1]|upper }}</div>
+      <div class="flex-grow-1 min-w-0">
+        <div class="name text-truncate">{{ u.full_name or u.username }}</div>
+        <div class="role">{{ roles[u.role] }}</div>
+      </div>
+      <a href="/cuenta" title="Mi cuenta" class="fs-5"><i class="bi bi-gear"></i></a>
+      <a href="/logout" title="Salir" class="fs-5"><i class="bi bi-box-arrow-right"></i></a>
+    </div>
+  </nav>
+  <main class="main">
+    {% for kind, msg in flashes %}
+      <div class="alert alert-{{ kind }} alert-dismissible fade show py-2">{{ msg }}<button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button></div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script src="/static/bootstrap.bundle.min.js"></script>
+<script>
+function toggleNav(){ document.getElementById('sidebar').classList.toggle('open'); document.getElementById('backdrop').classList.toggle('show'); }
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

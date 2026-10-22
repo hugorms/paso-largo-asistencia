@@ -1,0 +1,145 @@
+import hashlib
+import os
+import secrets
+import sqlite3
+import threading
+from contextlib import contextmanager
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = Path(os.environ.get("ASISTENCIA_DATA", BASE_DIR / "datos"))
+PHOTOS_DIR = DATA_DIR / "fotos"
+DB_PATH = DATA_DIR / "asistencia.db"
+
+_lock = threading.Lock()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, full_name TEXT,
+    password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'consulta',
+    active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS devices (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER DEFAULT 80,
+    https INTEGER DEFAULT 0, username TEXT NOT NULL, password TEXT NOT NULL,
+    tz_offset TEXT DEFAULT '-05:00', door_no INTEGER DEFAULT 1,
+    direction TEXT DEFAULT 'ambos',          -- ambos | entrada | salida
+    active INTEGER DEFAULT 1, model TEXT, serial TEXT, firmware TEXT, mac TEXT,
+    online INTEGER DEFAULT 0, last_seen TEXT, last_error TEXT, last_event_time TEXT
+);
+CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL,
+    tolerance_min INTEGER DEFAULT 10, lunch_min INTEGER DEFAULT 0, days TEXT DEFAULT '1,2,3,4,5'
+);
+CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL);
+CREATE TABLE IF NOT EXISTS employees (
+    id INTEGER PRIMARY KEY, employee_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
+    document TEXT, department_id INTEGER REFERENCES departments(id), position TEXT,
+    email TEXT, phone TEXT, gender TEXT DEFAULT 'unknown',
+    schedule_id INTEGER REFERENCES schedules(id), hire_date TEXT,
+    active INTEGER DEFAULT 1, photo TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS employee_sync (
+    employee_id INTEGER, device_id INTEGER, status TEXT, message TEXT, updated_at TEXT,
+    PRIMARY KEY (employee_id, device_id)
+);
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY, device_id INTEGER, serial_no INTEGER, event_time TEXT NOT NULL,
+    employee_no TEXT, name TEXT, major INTEGER, minor INTEGER, verify_mode TEXT,
+    attendance_status TEXT, picture_url TEXT, valid INTEGER DEFAULT 0, source TEXT DEFAULT 'equipo',
+    UNIQUE (device_id, serial_no)
+);
+CREATE INDEX IF NOT EXISTS ix_events_emp_time ON events(employee_no, event_time);
+CREATE INDEX IF NOT EXISTS ix_events_time ON events(event_time);
+CREATE TABLE IF NOT EXISTS holidays (id INTEGER PRIMARY KEY, date TEXT UNIQUE NOT NULL, name TEXT);
+CREATE TABLE IF NOT EXISTS leaves (
+    id INTEGER PRIMARY KEY, employee_id INTEGER NOT NULL, date_from TEXT NOT NULL, date_to TEXT NOT NULL,
+    kind TEXT NOT NULL, notes TEXT, created_by TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY, ts TEXT DEFAULT (datetime('now','localtime')), username TEXT,
+    action TEXT, detail TEXT
+);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+"""
+
+
+def connect():
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
+
+
+@contextmanager
+def tx():
+    conn = connect()
+    try:
+        with _lock:
+            yield conn
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def q(sql, args=()):
+    with tx() as c:
+        return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
+def q1(sql, args=()):
+    rows = q(sql, args)
+    return rows[0] if rows else None
+
+
+def ex(sql, args=()):
+    with tx() as c:
+        cur = c.execute(sql, args)
+        return cur.lastrowid
+
+
+def hash_password(pw, salt=None):
+    salt = salt or secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 200_000).hex()
+    return f"{salt}${h}"
+
+
+def check_password(pw, stored):
+    salt, _ = stored.split("$", 1)
+    return secrets.compare_digest(hash_password(pw, salt), stored)
+
+
+def get_setting(key, default=None):
+    r = q1("SELECT value FROM settings WHERE key=?", (key,))
+    return r["value"] if r else default
+
+
+def set_setting(key, value):
+    ex("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+       (key, str(value)))
+
+
+def audit(username, action, detail=""):
+    ex("INSERT INTO audit(username, action, detail) VALUES (?,?,?)", (username, action, detail))
+
+
+def init():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+    with tx() as c:
+        c.executescript(SCHEMA)
+        if not c.execute("SELECT 1 FROM users").fetchone():
+            c.execute("INSERT INTO users(username, full_name, password_hash, role) VALUES (?,?,?,?)",
+                      ("admin", "Administrador", hash_password("admin123"), "admin"))
+        if not c.execute("SELECT 1 FROM schedules").fetchone():
+            c.execute("INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days) "
+                      "VALUES ('Oficina L-V','08:00','17:00',10,60,'1,2,3,4,5')")
+        c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('company','Paso Largo')")
+        c.execute("UPDATE settings SET value='Paso Largo' WHERE key='company' AND value='Mi Empresa'")
+        c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('poll_seconds','5')")
+        c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('min_gap_minutes','2')")
+    key_file = DATA_DIR / "secret.key"
+    if not key_file.exists():
+        key_file.write_text(secrets.token_hex(32))
+    return key_file.read_text().strip()

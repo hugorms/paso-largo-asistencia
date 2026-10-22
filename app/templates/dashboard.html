@@ -1,0 +1,96 @@
+{% extends "base.html" %}{% block title %}Panel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Panel de hoy</h1><div class="sub"><span class="dot dot-on me-1"></span> En vivo · actualizado <span id="now" class="mono">{{ d.now }}</span></div></div>
+</div>
+<div class="row g-3 mb-3">
+  {% for key, label, color, icon in [('total','Empleados activos','primary','people'),('presentes','Presentes hoy','success','person-check'),
+     ('tarde','Llegaron tarde','warning','alarm'),('ausente','Ausentes','danger','person-x'),('pendiente','Aún no marcan','secondary','hourglass-split'),('justificado','Con permiso','info','clipboard-check')] %}
+  <div class="col-6 col-md-4 col-xl-2"><div class="card stat"><div class="d-flex justify-content-between align-items-start gap-2">
+    <div><div class="label">{{ label }}</div><div class="value mono" id="k-{{ key }}">{{ d[key] }}</div></div>
+    <div class="ico ico-{{ color }}"><i class="bi bi-{{ icon }}"></i></div></div></div></div>
+  {% endfor %}
+</div>
+<div class="row g-3">
+  <div class="col-xl-8">
+    <div class="card card-future mb-3">
+      <div class="fx-head">
+        <div><div class="fx-kicker">TENDENCIA · 7 DÍAS</div><div class="fx-title">Asistencia semanal</div></div>
+        <div class="fx-kpis">
+          <div><span class="fx-k" id="fx-rate">—</span><span class="fx-l">puntualidad</span></div>
+          <div><span class="fx-k" id="fx-pres">—</span><span class="fx-l">asistencias</span></div>
+          <div><span class="fx-k fx-warn" id="fx-late">—</span><span class="fx-l">tardanzas</span></div>
+          <div><span class="fx-k fx-bad" id="fx-abs">—</span><span class="fx-l">faltas</span></div>
+        </div>
+      </div>
+      <div class="fx-body"><canvas id="week" height="120"></canvas></div>
+      <div class="fx-legend"><span><i style="background:#f1f7d2"></i>Puntual</span><span><i style="background:#5aa9e6"></i>Tarde</span><span><i style="background:#f26b55"></i>Ausente</span></div>
+    </div>
+    <div class="card"><div class="card-header">Marcaciones en vivo <a href="/eventos" class="small fw-normal">Ver todas</a></div>
+      <div class="table-responsive table-wrap"><table class="table table-hover align-middle">
+        <thead><tr><th>Hora</th><th>Empleado</th><th>Evento</th><th>Equipo</th></tr></thead>
+        <tbody id="events"></tbody></table></div></div>
+  </div>
+  <div class="col-xl-4">
+    <div class="card mb-3"><div class="card-header">Dispositivos</div>
+      <ul class="list-group list-group-flush" id="devices">
+      {% for dv in d.devices %}<li class="list-group-item d-flex justify-content-between align-items-center gap-2">
+        <span class="d-flex align-items-center gap-2"><span class="dot {{ 'dot-on' if dv.online else 'dot-off' }}"></span>{{ dv.name }}</span>
+        <span class="d-flex align-items-center gap-2">
+          <span class="small text-secondary text-truncate" style="max-width:140px">{{ 'En línea' if dv.online else (dv.last_error or 'Sin conexión') }}</span>
+          {% if u.role in ['admin','supervisor'] %}<form method="post" action="/dispositivos/{{ dv.id }}/puerta-abrir" onsubmit="return confirm('¿Abrir la puerta de {{ dv.name }}?')">
+            <button class="btn btn-sm btn-outline-primary" title="Abrir puerta"><i class="bi bi-door-open"></i> Abrir</button></form>{% endif %}
+        </span></li>
+      {% else %}<li class="list-group-item empty"><i class="bi bi-cpu"></i>No hay equipos. <a href="/dispositivos">Agregar uno</a></li>{% endfor %}
+      </ul>
+    </div>
+    <div class="card mb-3"><div class="card-header">Tardanzas de hoy</div><ul class="list-group list-group-flush" id="late"></ul></div>
+    <div class="card"><div class="card-header">Sin marcar hoy</div><ul class="list-group list-group-flush" id="absent"></ul></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/chart.umd.js"></script>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const empty = (icon, text, cols) => cols ? `<tr><td colspan="${cols}" class="empty"><i class="bi bi-${icon}"></i>${text}</td></tr>` : `<li class="list-group-item empty"><i class="bi bi-${icon}"></i>${text}</li>`;
+Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+const cv = document.getElementById('week'), ctx = cv.getContext('2d');
+const grad = (c1, c2) => (c) => { const a = c.chart.chartArea; if (!a) return c1; const g = c.chart.ctx.createLinearGradient(0, a.top, 0, a.bottom); g.addColorStop(0, c1); g.addColorStop(1, c2); return g; };
+const glow = {id:'glow', beforeDatasetDraw(c, a){ const ds = c.data.datasets[a.index]; c.ctx.save(); c.ctx.shadowColor = ds.borderColor; c.ctx.shadowBlur = ds.type === 'line' ? 8 : 4; },
+              afterDatasetDraw(c){ c.ctx.restore(); }};
+const scan = {id:'scan', beforeDraw(c){ const {ctx, chartArea:a} = c; if (!a) return; ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,.05)';
+  for (let x = a.left; x < a.right; x += 18) { ctx.beginPath(); ctx.moveTo(x, a.top); ctx.lineTo(x, a.bottom); ctx.stroke(); } ctx.restore(); }};
+const chart = new Chart(cv, {data:{labels:[], datasets:[
+  {type:'line', label:'Puntual', data:[], borderColor:'#f1f7d2', backgroundColor:grad('rgba(241,247,210,.38)','rgba(241,247,210,0)'),
+   fill:'origin', tension:.42, borderWidth:2.5, pointRadius:4, pointHoverRadius:7, pointBackgroundColor:'#7a8d44', pointBorderColor:'#f1f7d2', pointBorderWidth:2},
+  {type:'bar', label:'Tarde', data:[], borderColor:'#5aa9e6', backgroundColor:grad('rgba(90,169,230,1)','rgba(90,169,230,.35)'), borderRadius:6, barPercentage:.5, categoryPercentage:.45, borderWidth:0},
+  {type:'bar', label:'Ausente', data:[], borderColor:'#f26b55', backgroundColor:grad('rgba(242,107,85,1)','rgba(242,107,85,.35)'), borderRadius:6, barPercentage:.5, categoryPercentage:.45, borderWidth:0}]},
+  plugins:[scan],
+  options:{animation:{duration:900, easing:'easeOutQuart'}, interaction:{mode:'index', intersect:false},
+    plugins:{legend:{display:false}, tooltip:{backgroundColor:'rgba(74,90,40,.96)', borderColor:'rgba(241,247,210,.45)', borderWidth:1,
+      titleColor:'#f1f7d2', bodyColor:'#e9edd8', padding:10, cornerRadius:8, displayColors:true, boxPadding:4}},
+    scales:{x:{grid:{display:false}, border:{color:'rgba(241,247,210,.25)'}, ticks:{color:'#ffffff', font:{size:11, weight:'500'}}},
+            y:{beginAtZero:true, ticks:{precision:0, color:'#f1f4e4', font:{size:10}}, border:{display:false},
+               grid:{color:'rgba(241,247,210,.09)', drawTicks:false}}}}});
+function paint(d){
+  for (const k of ['total','presentes','tarde','ausente','pendiente','justificado']) document.getElementById('k-'+k).textContent = d[k];
+  document.getElementById('now').textContent = d.now;
+  document.getElementById('events').innerHTML = d.events.map(ev => `<tr><td class="mono">${ev.event_time.slice(11,19)} <span class="text-secondary small">${ev.event_time.slice(8,10)}/${ev.event_time.slice(5,7)}</span></td>
+      <td>${esc(ev.emp_name || ev.name || '—')} <span class="text-secondary small">${esc(ev.employee_no||'')}</span></td>
+      <td><span class="badge text-bg-${ev.valid?'success':'secondary'}">${esc(ev.minor_name)}</span></td><td>${esc(ev.device||'Manual')}</td></tr>`).join('') || empty('clock-history','Sin marcaciones todavía', 4);
+  document.getElementById('late').innerHTML = d.late_list.map(l => `<li class="list-group-item d-flex justify-content-between"><span>${esc(l.name)}</span><span class="mono">${l.entry} <span class="badge text-bg-warning ms-1">+${l.late} min</span></span></li>`).join('') || empty('emoji-smile','Nadie llegó tarde');
+  document.getElementById('absent').innerHTML = d.absent_list.map(n => `<li class="list-group-item">${esc(n)}</li>`).join('') || empty('check2-circle','Todos marcaron');
+  chart.data.labels = d.week.map(w=>w.date);
+  chart.data.datasets[0].data = d.week.map(w=>w.puntual); chart.data.datasets[1].data = d.week.map(w=>w.tarde); chart.data.datasets[2].data = d.week.map(w=>w.ausente);
+  chart.update('none');
+  const sum = k => d.week.reduce((a, w) => a + w[k], 0), p = sum('puntual'), t = sum('tarde'), ab = sum('ausente');
+  document.getElementById('fx-rate').textContent = (p + t) ? Math.round(100 * p / (p + t)) + '%' : '—';
+  document.getElementById('fx-pres').textContent = p + t;
+  document.getElementById('fx-late').textContent = t;
+  document.getElementById('fx-abs').textContent = ab;
+}
+paint({{ d | tojson }}); chart.update();
+setInterval(async () => { try { paint(await (await fetch('/api/dashboard')).json()); } catch (e) {} }, 2000);
+</script>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}{% block title %}Empleados{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Empleados</h1><div class="sub">{{ emps|length }} {{ 'persona' if emps|length == 1 else 'personas' }}{{ ' (incluye inactivos)' if inactivos }}</div></div>
+  <div class="page-actions">
+  {% if u.role == 'admin' %}
+    <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#imp"><i class="bi bi-upload"></i> Importar</button>
+    <form method="post" action="/empleados/sincronizar-todos" onsubmit="return confirm('¿Enviar todos los empleados activos y sus rostros a todos los equipos?')"><button class="btn btn-outline-secondary"><i class="bi bi-arrow-repeat"></i> Sincronizar todos</button></form>
+  {% endif %}
+  {% if u.role in ['admin','supervisor'] %}<a href="/empleados/nuevo" class="btn btn-primary"><i class="bi bi-person-plus"></i> Nuevo empleado</a>{% endif %}
+  </div>
+</div>
+<div class="card">
+  <div class="card-body border-bottom py-3">
+    <form class="row g-2 align-items-center">
+      <div class="col-md-5"><div class="input-group"><span class="input-group-text bg-white"><i class="bi bi-search"></i></span><input name="q" value="{{ q }}" class="form-control" placeholder="Buscar por nombre, N° o documento"></div></div>
+      <div class="col-md-3"><select name="dep" class="form-select" onchange="this.form.submit()"><option value="">Todos los departamentos</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if dep|string == dp.id|string }}>{{ dp.name }}</option>{% endfor %}</select></div>
+      <div class="col-md-2"><div class="form-check mb-0"><input class="form-check-input" type="checkbox" name="inactivos" value="1" id="ina" {{ 'checked' if inactivos }} onchange="this.form.submit()"><label class="form-check-label" for="ina">Ver inactivos</label></div></div>
+      <div class="col-md-2 text-md-end"><button class="btn btn-outline-secondary w-100">Buscar</button></div>
+    </form>
+  </div>
+  <div class="table-responsive"><table class="table table-hover align-middle">
+  <thead><tr><th></th><th>N°</th><th>Nombre</th><th>Departamento</th><th>Cargo</th><th>Horario</th><th>Estado</th><th></th></tr></thead>
+  <tbody>
+  {% for e in emps %}
+  <tr class="{{ 'opacity-50' if not e.active }}">
+    <td style="width:56px">{% if e.photo %}<img src="/fotos/{{ e.photo }}" class="avatar" alt="">{% else %}<span class="avatar-ph">{{ e.name[:1]|upper }}</span>{% endif %}</td>
+    <td class="mono text-secondary">{{ e.employee_no }}</td>
+    <td class="fw-medium">{{ e.name }}</td>
+    <td>{{ e.department or '—' }}</td><td>{{ e.position or '—' }}</td><td>{{ e.schedule or '—' }}</td>
+    <td><div class="d-flex flex-wrap gap-1">
+      {% if not e.active %}<span class="badge text-bg-secondary">Inactivo</span>{% endif %}
+      {% if e.sync_err %}<span class="badge text-bg-danger">Error en {{ e.sync_err }} equipo{{ 's' if e.sync_err > 1 }}</span>{% elif e.sync_ok %}<span class="badge text-bg-success">En equipo</span>{% endif %}
+      {% if not e.photo %}<span class="badge text-bg-warning">Sin foto</span>{% endif %}
+    </div></td>
+    <td class="text-end text-nowrap">
+      <a href="/reportes?emp={{ e.id }}&vista=detalle" class="btn btn-sm btn-outline-secondary btn-icon" title="Ver asistencia"><i class="bi bi-calendar3"></i></a>
+      {% if u.role in ['admin','supervisor'] %}<a href="/empleados/{{ e.id }}" class="btn btn-sm btn-outline-primary btn-icon" title="Editar"><i class="bi bi-pencil"></i></a>{% endif %}
+    </td>
+  </tr>
+  {% else %}<tr><td colspan="8" class="empty"><i class="bi bi-people"></i>No hay empleados. Crea uno o impórtalos desde el equipo o un Excel.</td></tr>{% endfor %}
+  </tbody></table></div>
+</div>
+
+<div class="modal fade" id="imp"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">Importar empleados</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <h6 class="fw-semibold">Desde un equipo</h6><p class="small text-secondary">Trae a las personas que ya están registradas en el terminal.</p>
+    <form method="post" action="/empleados/importar-equipo" class="d-flex gap-2 mb-4">
+      <select name="device_id" class="form-select" required>{% for dv in devs %}<option value="{{ dv.id }}">{{ dv.name }} ({{ dv.host }})</option>{% else %}<option value="">Primero agrega un dispositivo</option>{% endfor %}</select>
+      <button class="btn btn-primary">Importar</button></form>
+    <h6 class="fw-semibold">Desde Excel (.xlsx)</h6><p class="small text-secondary">Columnas: <code>numero</code>, <code>nombre</code> y opcionales <code>documento</code>, <code>departamento</code>, <code>cargo</code>, <code>email</code>, <code>telefono</code>.</p>
+    <form method="post" action="/empleados/importar-excel" enctype="multipart/form-data" class="d-flex gap-2">
+      <input type="file" name="file" accept=".xlsx" class="form-control" required><button class="btn btn-primary">Importar</button></form>
+  </div></div></div></div>
+{% endblock %}

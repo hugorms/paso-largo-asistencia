@@ -1,0 +1,11 @@
+# Datos locales: base de datos, fotos y clave de sesión (nunca subir)
+datos/
+*.db
+*.db-wal
+*.db-shm
+secret.key
+# Entorno de Python
+.venv/
+venv/
+__pycache__/
+*.pyc

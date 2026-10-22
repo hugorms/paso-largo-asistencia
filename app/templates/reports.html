@@ -1,0 +1,43 @@
+{% extends "base.html" %}{% block title %}Reportes{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Reportes de asistencia</h1><div class="sub">Del {{ d1.strftime('%d/%m/%Y') }} al {{ d2.strftime('%d/%m/%Y') }}</div></div>
+  <div class="page-actions">
+    <a class="btn btn-outline-secondary" href="/reportes/exportar.xlsx?{{ qs }}"><i class="bi bi-file-earmark-excel text-success"></i> Excel</a>
+    <a class="btn btn-outline-secondary" href="/reportes/exportar.pdf?{{ qs }}"><i class="bi bi-file-earmark-pdf text-danger"></i> PDF</a>
+  </div>
+</div>
+<div class="card">
+<div class="card-body border-bottom py-3">
+<form class="row g-2 align-items-end">
+  <div class="col-6 col-md-2"><label class="form-label">Desde</label><input type="date" name="desde" value="{{ d1 }}" class="form-control"></div>
+  <div class="col-6 col-md-2"><label class="form-label">Hasta</label><input type="date" name="hasta" value="{{ d2 }}" class="form-control"></div>
+  <div class="col-md-3"><label class="form-label">Empleado</label><select name="emp" class="form-select"><option value="">Todos</option>{% for e in emps %}<option value="{{ e.id }}" {{ 'selected' if emp|string == e.id|string }}>{{ e.name }}</option>{% endfor %}</select></div>
+  <div class="col-md-3"><label class="form-label">Departamento</label><select name="dep" class="form-select"><option value="">Todos</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if dep|string == dp.id|string }}>{{ dp.name }}</option>{% endfor %}</select></div>
+  <input type="hidden" name="vista" value="{{ vista }}">
+  <div class="col-md-2"><button class="btn btn-primary w-100">Aplicar</button></div>
+</form>
+</div>
+<ul class="nav nav-tabs px-3 pt-2 bg-white">
+  <li class="nav-item"><a class="nav-link {{ 'active' if vista == 'resumen' }}" href="?desde={{ d1 }}&hasta={{ d2 }}&emp={{ emp }}&dep={{ dep }}&vista=resumen">Resumen</a></li>
+  <li class="nav-item"><a class="nav-link {{ 'active' if vista == 'detalle' }}" href="?desde={{ d1 }}&hasta={{ d2 }}&emp={{ emp }}&dep={{ dep }}&vista=detalle">Detalle diario</a></li>
+</ul>
+<div class="table-responsive">
+{% if vista == 'detalle' %}
+<table class="table table-hover align-middle">
+<thead><tr><th>Fecha</th><th>Empleado</th><th>Entrada</th><th>Salida</th><th>Tardanza</th><th>Horas</th><th>Extra</th><th>Estado</th><th>Observación</th></tr></thead><tbody>
+{% for r in rows %}<tr><td class="mono">{{ days[r.weekday] }} {{ r.date.strftime('%d/%m/%Y') }}</td><td class="fw-medium">{{ r.name }}</td>
+<td class="mono">{{ r.entry.strftime('%H:%M') if r.entry else '—' }}</td><td class="mono">{{ r.exit.strftime('%H:%M') if r.exit else '—' }}</td>
+<td class="mono">{{ (r.late_min ~ ' min') if r.late_min else '—' }}</td><td class="mono">{{ hm(r.worked_min) if r.worked_min else '—' }}</td><td class="mono">{{ hm(r.overtime_min) if r.overtime_min else '—' }}</td>
+<td><span class="badge text-bg-{{ colors.get(r.status, 'secondary') }}">{{ r.status }}</span></td><td class="small text-secondary">{{ r.note }}</td></tr>
+{% else %}<tr><td colspan="9" class="empty"><i class="bi bi-inbox"></i>Sin datos en este rango.</td></tr>{% endfor %}</tbody></table>
+{% else %}
+<table class="table table-hover align-middle">
+<thead><tr><th>N°</th><th>Empleado</th><th>Departamento</th><th class="text-end">Días asistidos</th><th class="text-end">Tardanzas</th><th class="text-end">Min. tarde</th><th class="text-end">Faltas</th><th class="text-end">Justificadas</th><th class="text-end">Sin salida</th><th class="text-end">Horas</th><th class="text-end">Extra</th></tr></thead><tbody>
+{% for s in summary %}<tr><td class="mono text-secondary">{{ s.employee_no }}</td><td><a href="?desde={{ d1 }}&hasta={{ d2 }}&emp={{ s.employee_id }}&vista=detalle" class="fw-medium">{{ s.name }}</a></td><td>{{ s.department or '—' }}</td>
+<td class="text-end mono">{{ s.days_present }}</td><td class="text-end mono">{{ s.late_days }}</td><td class="text-end mono">{{ s.late_min }}</td><td class="text-end mono {{ 'text-danger fw-semibold' if s.absences }}">{{ s.absences }}</td><td class="text-end mono">{{ s.justified }}</td><td class="text-end mono">{{ s.missing_exit }}</td>
+<td class="text-end mono">{{ hm(s.worked_min) }}</td><td class="text-end mono">{{ hm(s.overtime_min) }}</td></tr>
+{% else %}<tr><td colspan="11" class="empty"><i class="bi bi-inbox"></i>Sin datos en este rango.</td></tr>{% endfor %}</tbody></table>
+{% endif %}
+</div></div>
+{% endblock %}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingresar · Paso Largo</title>
+<link href="/static/bootstrap.min.css" rel="stylesheet">
+<link href="/static/bootstrap-icons.min.css" rel="stylesheet">
+<link href="/static/tema.css?v=8" rel="stylesheet">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="d-flex align-items-center gap-2 mb-4 justify-content-center">
+      <div class="brand-logo" style="width:44px;height:44px;font-size:1.4rem"><i class="bi bi-person-walking"></i></div>
+      <div><div class="fw-bold fs-4 lh-1">Paso Largo</div><div class="text-secondary small">Control de asistencia</div></div>
+    </div>
+    <div class="card"><div class="card-body p-4">
+      <h1 class="h5 mb-3">Ingresar</h1>
+      {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+      <form method="post">
+        <div class="mb-3"><label class="form-label">Usuario</label><input name="username" class="form-control" autofocus required autocomplete="username"></div>
+        <div class="mb-4"><label class="form-label">Contraseña</label><input name="password" type="password" class="form-control" required autocomplete="current-password"></div>
+        <button class="btn btn-primary w-100 py-2">Ingresar <i class="bi bi-arrow-right"></i></button>
+      </form>
+    </div></div>
+    {% if company and company != 'Paso Largo' %}<p class="text-center text-secondary small mt-3">{{ company }}</p>{% endif %}
+  </div>
+</div>
+</body></html>

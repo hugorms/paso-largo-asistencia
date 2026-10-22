@@ -1,0 +1,75 @@
+{% extends "base.html" %}{% block title %}Empleado{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><div class="small"><a href="/empleados"><i class="bi bi-arrow-left"></i> Empleados</a></div><h1>{{ e.name if e.id else 'Nuevo empleado' }}</h1>{% if e.id %}<div class="sub">N° {{ e.employee_no }}</div>{% endif %}</div>
+  {% if e.id %}<div class="page-actions">
+    <form method="post" action="/empleados/{{ e.id }}/sincronizar"><button class="btn btn-outline-secondary"><i class="bi bi-arrow-repeat"></i> Reenviar a equipos</button></form>
+    {% if u.role == 'admin' %}<form method="post" action="/empleados/{{ e.id }}/eliminar" onsubmit="return confirm('¿Dar de baja a {{ e.name }} y borrarlo de los equipos? Su historial de asistencia se conserva.')"><button class="btn btn-outline-danger"><i class="bi bi-person-dash"></i> Dar de baja</button></form>{% endif %}
+  </div>{% endif %}
+</div>
+<form method="post" action="/empleados/guardar" enctype="multipart/form-data">
+<input type="hidden" name="id" value="{{ e.id or '' }}">
+<div class="row g-3 align-items-start">
+  <div class="col-lg-8"><div class="card"><div class="card-header">Datos</div><div class="card-body">
+    <div class="row g-3">
+    <div class="col-md-4"><label class="form-label">N° de empleado *</label><input name="employee_no" value="{{ e.employee_no or '' }}" class="form-control mono" required pattern="[A-Za-z0-9]{1,32}" title="Solo letras y números"><div class="form-text">ID con el que el equipo lo reconoce.</div></div>
+    <div class="col-md-8"><label class="form-label">Nombre completo *</label><input name="name" value="{{ e.name or '' }}" class="form-control" required maxlength="32"><div class="form-text">Máximo 32 caracteres (límite del equipo).</div></div>
+    <div class="col-md-4"><label class="form-label">Documento</label><input name="document" value="{{ e.document or '' }}" class="form-control"></div>
+    <div class="col-md-4"><label class="form-label">Departamento</label><select name="department_id" class="form-select"><option value="">—</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if e.department_id == dp.id }}>{{ dp.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-4"><label class="form-label">Cargo</label><input name="position" value="{{ e.position or '' }}" class="form-control"></div>
+    <div class="col-md-4"><label class="form-label">Email</label><input type="email" name="email" value="{{ e.email or '' }}" class="form-control"></div>
+    <div class="col-md-4"><label class="form-label">Teléfono</label><input name="phone" value="{{ e.phone or '' }}" class="form-control"></div>
+    <div class="col-md-4"><label class="form-label">Género</label><select name="gender" class="form-select">{% for v,l in [('unknown','No indica'),('male','Masculino'),('female','Femenino')] %}<option value="{{ v }}" {{ 'selected' if e.gender == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div class="col-md-6"><label class="form-label">Horario</label><select name="schedule_id" class="form-select"><option value="">Sin horario (no controla tardanzas)</option>{% for s in schedules %}<option value="{{ s.id }}" {{ 'selected' if e.schedule_id == s.id or (not e.id and loop.first) }}>{{ s.name }} · {{ s.start_time }}–{{ s.end_time }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Fecha de ingreso</label><input type="date" name="hire_date" value="{{ e.hire_date or '' }}" class="form-control"></div>
+    <div class="col-md-3 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="active" value="1" id="act" {{ 'checked' if e.active }}><label class="form-check-label" for="act">Activo</label></div></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary"><i class="bi bi-check2"></i> Guardar y enviar a equipos</button>
+      <a href="/empleados" class="btn btn-outline-secondary">Cancelar</a>
+    </div>
+  </div></div></div>
+  <div class="col-lg-4">
+    <div class="card"><div class="card-header">Foto del rostro</div><div class="card-body">
+      <div class="photo-box mb-3" id="box">
+        {% if e.photo %}<img id="preview" src="/fotos/{{ e.photo }}" alt="">{% else %}<img id="preview" class="d-none" alt=""><div id="ph" class="text-center"><i class="bi bi-person-bounding-box fs-1 d-block"></i><span class="small">Sin foto</span></div>{% endif %}
+        <video id="cam" class="d-none" autoplay playsinline></video>
+      </div>
+      <input type="file" name="photo" id="photo" accept="image/jpeg,image/png" class="d-none">
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-outline-secondary flex-fill" onclick="document.getElementById('photo').click()"><i class="bi bi-image"></i> Subir foto</button>
+        <button type="button" class="btn btn-outline-secondary flex-fill" id="camBtn"><i class="bi bi-camera"></i> Cámara</button>
+      </div>
+      <button type="button" class="btn btn-primary w-100 mt-2 d-none" id="shotBtn"><i class="bi bi-camera-fill"></i> Tomar foto</button>
+      <p class="form-text mt-2 mb-0">De frente, bien iluminado, sin lentes oscuros ni gorra y con fondo claro. Se ajusta sola al tamaño que acepta el equipo.</p>
+    </div></div>
+    {% if sync %}<div class="card mt-3"><div class="card-header">Estado en equipos</div><ul class="list-group list-group-flush">
+      {% for s in sync %}<li class="list-group-item small"><div class="d-flex justify-content-between"><span class="fw-medium">{{ s.device }}</span><span class="badge text-bg-{{ 'success' if s.status == 'ok' else 'danger' }}">{{ 'OK' if s.status == 'ok' else 'Error' }}</span></div>
+        <div class="text-secondary">{{ s.message }} · {{ s.updated_at }}</div></li>{% endfor %}
+    </ul></div>{% endif %}
+  </div>
+</div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+const photo = document.getElementById('photo'), preview = document.getElementById('preview'), cam = document.getElementById('cam'), ph = document.getElementById('ph');
+const show = el => { [preview, cam].forEach(x => x.classList.add('d-none')); if (ph) ph.classList.add('d-none'); el.classList.remove('d-none'); };
+photo.onchange = () => { if (photo.files[0]) { preview.src = URL.createObjectURL(photo.files[0]); show(preview); } };
+document.getElementById('camBtn').onclick = async () => {
+  try {
+    cam.srcObject = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user', width:640, height:480}});
+    show(cam); document.getElementById('shotBtn').classList.remove('d-none');
+  } catch (e) { alert('No se pudo abrir la cámara: ' + e.message); }
+};
+document.getElementById('shotBtn').onclick = () => {
+  const c = document.createElement('canvas'); c.width = cam.videoWidth; c.height = cam.videoHeight;
+  c.getContext('2d').drawImage(cam, 0, 0);
+  c.toBlob(b => {
+    const dt = new DataTransfer(); dt.items.add(new File([b], 'camara.jpg', {type:'image/jpeg'})); photo.files = dt.files;
+    preview.src = URL.createObjectURL(b); show(preview);
+    cam.srcObject.getTracks().forEach(t => t.stop()); document.getElementById('shotBtn').classList.add('d-none');
+  }, 'image/jpeg', 0.9);
+};
+</script>
+{% endblock %}
