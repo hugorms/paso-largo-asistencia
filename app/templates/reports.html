@@ -10,12 +10,12 @@
 <div class="card">
 <div class="card-body border-bottom py-3">
 <form class="row g-2 align-items-end">
-  <div class="col-6 col-md-2"><label class="form-label">Desde</label><input type="date" name="desde" value="{{ d1 }}" class="form-control"></div>
-  <div class="col-6 col-md-2"><label class="form-label">Hasta</label><input type="date" name="hasta" value="{{ d2 }}" class="form-control"></div>
-  <div class="col-md-3"><label class="form-label">Empleado</label><select name="emp" class="form-select"><option value="">Todos</option>{% for e in emps %}<option value="{{ e.id }}" {{ 'selected' if emp|string == e.id|string }}>{{ e.name }}</option>{% endfor %}</select></div>
-  <div class="col-md-3"><label class="form-label">Departamento</label><select name="dep" class="form-select"><option value="">Todos</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if dep|string == dp.id|string }}>{{ dp.name }}</option>{% endfor %}</select></div>
+  <div class="col-6 col-md-3 col-xl-2"><label class="form-label">Desde</label><input type="date" name="desde" value="{{ d1 }}" class="form-control"></div>
+  <div class="col-6 col-md-3 col-xl-2"><label class="form-label">Hasta</label><input type="date" name="hasta" value="{{ d2 }}" class="form-control"></div>
+  <div class="col-md-6 col-xl-3"><label class="form-label">Empleado</label><select name="emp" class="form-select"><option value="">Todos</option>{% for e in emps %}<option value="{{ e.id }}" {{ 'selected' if emp|string == e.id|string }}>{{ e.name }}</option>{% endfor %}</select></div>
+  <div class="col-md-6 col-xl-3"><label class="form-label">Departamento</label><select name="dep" class="form-select"><option value="">Todos</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if dep|string == dp.id|string }}>{{ dp.name }}</option>{% endfor %}</select></div>
   <input type="hidden" name="vista" value="{{ vista }}">
-  <div class="col-md-2"><button class="btn btn-primary w-100">Aplicar</button></div>
+  <div class="col-md-12 col-xl-2"><button class="btn btn-primary w-100">Aplicar</button></div>
 </form>
 </div>
 <ul class="nav nav-tabs px-3 pt-2 bg-white">

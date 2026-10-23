@@ -5,7 +5,7 @@
 <title>{% block title %}Asistencia{% endblock %} · Paso Largo</title>
 <link href="/static/bootstrap.min.css" rel="stylesheet">
 <link href="/static/bootstrap-icons.min.css" rel="stylesheet">
-<link href="/static/tema.css?v=10" rel="stylesheet">
+<link href="/static/tema.css?v=11" rel="stylesheet">
 </head>
 <body>
 {% macro brand() %}
@@ -79,10 +79,13 @@ document.querySelectorAll('[data-live][id]').forEach(el => {
     } catch (e) {}
   }, 2000);
 });
-// En el teléfono las tablas se ven como tarjetas: cada celda lleva el título de su columna
+// En el teléfono (o si la tabla no cabe) las tablas se ven como tarjetas: cada celda lleva el título de su columna
 function stackTable(t){
   const heads = [...t.querySelectorAll('thead th')].map(th => th.textContent.trim());
   if (!heads.length) return;
+  t.classList.remove('table-stack');
+  // en pantalla grande la tabla se desplaza de lado si hace falta; en teléfono siempre tarjetas
+  if (window.innerWidth >= 1200 || (window.innerWidth >= 768 && t.scrollWidth <= t.parentElement.clientWidth + 1)) return;
   t.classList.add('table-stack');
   t.querySelectorAll('tbody tr').forEach(tr => { let i = 0;
     for (const td of tr.children) { if (td.colSpan > 1 || td.classList.contains('empty')) { i += td.colSpan; continue; }
@@ -90,8 +93,10 @@ function stackTable(t){
 }
 document.querySelectorAll('table').forEach(t => {
   stackTable(t);
-  new MutationObserver(() => stackTable(t)).observe(t, {childList: true, subtree: true});
+  new MutationObserver(() => stackTable(t)).observe(t.tBodies[0] || t, {childList: true, subtree: true});
 });
+let stackTimer;
+window.addEventListener('resize', () => { clearTimeout(stackTimer); stackTimer = setTimeout(() => document.querySelectorAll('table').forEach(stackTable), 150); });
 function toggleNav(){ document.getElementById('sidebar').classList.toggle('open'); document.getElementById('backdrop').classList.toggle('show'); }
 </script>
 {% block scripts %}{% endblock %}

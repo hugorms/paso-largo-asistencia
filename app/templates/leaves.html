@@ -3,12 +3,12 @@
 <div class="page-head"><div><h1>Permisos y vacaciones</h1><div class="sub">Los días con permiso no cuentan como falta</div></div></div>
 <div class="card mb-3"><div class="card-header">Registrar permiso</div><div class="card-body">
 <form method="post" class="row g-2 align-items-end">
-  <div class="col-md-3"><label class="form-label">Empleado</label><select name="employee_id" class="form-select" required>{% for e in emps %}<option value="{{ e.id }}">{{ e.name }} ({{ e.employee_no }})</option>{% endfor %}</select></div>
-  <div class="col-6 col-md-2"><label class="form-label">Desde</label><input type="date" name="date_from" class="form-control" required></div>
-  <div class="col-6 col-md-2"><label class="form-label">Hasta</label><input type="date" name="date_to" class="form-control"></div>
-  <div class="col-md-2"><label class="form-label">Tipo</label><select name="kind" class="form-select">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></div>
-  <div class="col-md-2"><label class="form-label">Notas</label><input name="notes" class="form-control"></div>
-  <div class="col-md-1"><button class="btn btn-primary w-100" title="Agregar"><i class="bi bi-plus-lg"></i></button></div>
+  <div class="col-md-6 col-xl-3"><label class="form-label">Empleado</label><select name="employee_id" class="form-select" required>{% for e in emps %}<option value="{{ e.id }}">{{ e.name }} ({{ e.employee_no }})</option>{% endfor %}</select></div>
+  <div class="col-6 col-md-3 col-xl-2"><label class="form-label">Desde</label><input type="date" name="date_from" class="form-control" required></div>
+  <div class="col-6 col-md-3 col-xl-2"><label class="form-label">Hasta</label><input type="date" name="date_to" class="form-control"></div>
+  <div class="col-md-6 col-xl-2"><label class="form-label">Tipo</label><select name="kind" class="form-select">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select></div>
+  <div class="col-md-9 col-xl-2"><label class="form-label">Notas</label><input name="notes" class="form-control"></div>
+  <div class="col-md-3 col-xl-1"><button class="btn btn-primary w-100" title="Agregar"><i class="bi bi-plus-lg"></i><span class="d-xl-none">Agregar permiso</span></button></div>
 </form></div></div>
 <div class="card"><div class="table-responsive table-wrap"><table class="table table-hover align-middle">
 <thead><tr><th>Empleado</th><th>Desde</th><th>Hasta</th><th>Tipo</th><th>Notas</th><th>Registrado por</th><th></th></tr></thead><tbody>

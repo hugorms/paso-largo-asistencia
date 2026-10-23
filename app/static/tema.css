@@ -264,21 +264,25 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
 @media (max-width: 767.98px) { .fx-kpis { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 575.98px) { .fx-k { font-size: 1.1rem; } .fx-seg button { padding: .35rem .65rem; } }
 
-/* ---------- Teléfono: tablas como tarjetas, todo dentro de la pantalla ---------- */
+/* ---------- Tablas como tarjetas: en el teléfono o cuando no caben (lo decide base.html) ---------- */
+.table-stack thead { display: none; }
+.table-stack, .table-stack tbody, .table-stack tr, .table-stack td { display: block; width: 100%; }
+.table-stack tr { padding: .55rem .95rem; border-bottom: 1px solid #efefe6; }
+.table-stack tbody tr:last-child { border-bottom: 0; }
+.table-stack.table > :not(caption) > * > *.stk { display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+                                      padding: .18rem 0; border: 0; text-align: right; min-height: 1.6rem; }
+.table-stack td.stk::before { content: attr(data-label); flex: none; max-width: 45%; text-align: left; color: var(--pl-muted);
+                              font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.table-stack td.stk[data-label=""]::before { display: none; }
+.table-stack td.stk:first-child { font-weight: 600; }
+.table-stack td.stk > form, .table-stack td.stk > .d-flex { justify-content: flex-end; }
+.table-stack td.empty { display: block; text-align: center; }
+.table-stack .d-md-table-cell { display: none !important; }  /* columnas de detalle: solo en la tabla completa */
+
+
+/* ---------- Teléfono: todo dentro de la pantalla ---------- */
 @media (max-width: 767.98px) {
-  .table-stack thead { display: none; }
-  .table-stack, .table-stack tbody, .table-stack tr, .table-stack td { display: block; width: 100%; }
-  .table-stack tr { padding: .55rem .95rem; border-bottom: 1px solid #efefe6; }
-  .table-stack tbody tr:last-child { border-bottom: 0; }
-  .table > :not(caption) > * > *.stk { display: flex; align-items: center; justify-content: space-between; gap: .8rem;
-                                        padding: .18rem 0; border: 0; text-align: right; min-height: 1.6rem; }
-  .table-stack td.stk::before { content: attr(data-label); flex: none; max-width: 45%; text-align: left; color: var(--pl-muted);
-                                font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-  .table-stack td.stk[data-label=""]::before { display: none; }
-  .table-stack td.stk:first-child { font-weight: 600; }
-  .table-stack td.stk > form, .table-stack td.stk > .d-flex { justify-content: flex-end; }
-  .table-stack td.empty { display: block; text-align: center; }
-  .table-responsive { overflow-x: visible; }
+  .table-responsive { overflow-x: hidden; }
 
   /* panel: indicadores compactos de 3 en fila */
   .stat-col { flex: 0 0 auto; width: 33.333%; }
@@ -290,6 +294,17 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
   .page-actions { width: 100%; }
   .page-actions > .btn, .page-actions > form { flex: 1 1 auto; }
   .page-actions > form > .btn { width: 100%; }
+  .page-actions > .form-control, .page-actions > .form-select { flex: 1 1 140px; width: auto !important; min-width: 0; }
+  .page-actions > .btn-group { flex: none; }
+  .page-actions > .form-select { flex-basis: 100%; }
+  .photo-box { max-height: 230px; }
+  .table-stack td.stk > .form-control, .table-stack td.stk > .form-select { max-width: 68%; min-width: 0 !important; }
+  .table-stack td.stk > .form-check { margin-left: auto; }
+  .table-stack tr.table-light { background: var(--pl-olive-50); }
+  .modal-dialog { margin: .75rem; }
+  .card-body { padding: .95rem; }
+  .card-header { padding: .75rem .95rem; }
+  .form-actions > .btn, .form-actions > form { flex: 1 1 auto; }
 }
 @media (max-width: 575.98px) {
   .fx-head > div:first-child { width: 100%; }

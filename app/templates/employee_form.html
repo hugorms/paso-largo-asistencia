@@ -29,14 +29,14 @@
       <a href="/empleados" class="btn btn-outline-secondary">Cancelar</a>
     </div>
   </div></div></div>
-  <div class="col-lg-4">
+  <div class="col-lg-4 order-first order-lg-last">
     <div class="card"><div class="card-header">Foto del rostro</div><div class="card-body">
       <div class="photo-box mb-3" id="box">
         {% if e.photo or e.face_at %}<img id="preview" src="/empleados/{{ e.id }}/rostro" alt="" data-photo="/empleados/{{ e.id }}/rostro" data-label="Foto registrada" data-caption="{{ e.name }}" onerror="this.classList.add('d-none')">{% else %}<img id="preview" class="d-none" alt=""><div id="ph" class="text-center"><i class="bi bi-person-bounding-box fs-1 d-block"></i><span class="small">Sin foto</span></div>{% endif %}
         <video id="cam" class="d-none" autoplay playsinline></video>
       </div>
       <input type="file" name="photo" id="photo" accept="image/jpeg,image/png" class="d-none">
-      <div class="d-flex gap-2">
+      <div class="d-flex flex-wrap gap-2">
         <button type="button" class="btn btn-outline-secondary flex-fill" onclick="document.getElementById('photo').click()"><i class="bi bi-image"></i> Subir foto</button>
         <button type="button" class="btn btn-outline-secondary flex-fill" id="camBtn"><i class="bi bi-camera"></i> Cámara</button>
       </div>
