@@ -6,7 +6,7 @@
 <div class="row g-3 mb-3">
   {% for key, label, color, icon in [('total','Empleados activos','primary','people'),('presentes','Presentes hoy','success','person-check'),
      ('tarde','Llegaron tarde','warning','alarm'),('ausente','Ausentes','danger','person-x'),('pendiente','Aún no marcan','secondary','hourglass-split'),('justificado','Con permiso','info','clipboard-check')] %}
-  <div class="col-6 col-md-4 col-xl-2"><div class="card stat"><div class="d-flex justify-content-between align-items-start gap-2">
+  <div class="col-6 col-md-4 col-xl-2 stat-col"><div class="card stat"><div class="d-flex justify-content-between align-items-start gap-2">
     <div><div class="label">{{ label }}</div><div class="value mono" id="k-{{ key }}">{{ d[key] }}</div></div>
     <div class="ico ico-{{ color }}"><i class="bi bi-{{ icon }}"></i></div></div></div></div>
   {% endfor %}
@@ -31,7 +31,7 @@
       </div>
       <div class="fx-body"><canvas id="week" height="120"></canvas></div>
       <div class="fx-foot">
-        <div class="fx-legend"><span><i style="background:#f1f7d2"></i>Puntual</span><span><i style="background:#5aa9e6"></i>Tarde</span><span id="fx-leg-abs"><i style="background:#f26b55"></i>Ausente</span></div>
+        <div class="fx-legend"><span><i style="background:#f1f7d2"></i>Puntual</span><span><i style="background:#8fc8f0"></i>Tarde</span><span id="fx-leg-abs"><i style="background:#ff8a75"></i>Ausente</span></div>
         <div class="fx-mix" title="Composición del periodo"><b id="fx-mix-p"></b><b id="fx-mix-t"></b><b id="fx-mix-a"></b></div>
       </div>
     </div>
@@ -73,12 +73,12 @@ const scan = {id:'scan', beforeDraw(c){ const {ctx, chartArea:a} = c; if (!a) re
   for (let x = a.left; x < a.right; x += 18) { ctx.beginPath(); ctx.moveTo(x, a.top); ctx.lineTo(x, a.bottom); ctx.stroke(); } ctx.restore(); }};
 const chart = new Chart(cv, {data:{labels:[], datasets:[
   {type:'line', label:'Puntual', data:[], borderColor:'#f1f7d2', backgroundColor:grad('rgba(241,247,210,.38)','rgba(241,247,210,0)'),
-   fill:'origin', spanGaps:true, tension:.42, borderWidth:2.5, pointRadius:4, pointHoverRadius:7, pointBackgroundColor:'#7a8d44', pointBorderColor:'#f1f7d2', pointBorderWidth:2},
-  {type:'bar', label:'Tarde', data:[], borderColor:'#5aa9e6', backgroundColor:grad('rgba(90,169,230,1)','rgba(90,169,230,.35)'), borderRadius:6, barPercentage:.5, categoryPercentage:.45, borderWidth:0},
-  {type:'bar', label:'Ausente', data:[], borderColor:'#f26b55', backgroundColor:grad('rgba(242,107,85,1)','rgba(242,107,85,.35)'), borderRadius:6, barPercentage:.5, categoryPercentage:.45, borderWidth:0}]},
+   fill:'origin', spanGaps:true, tension:.42, borderWidth:2.5, pointRadius:4, pointHoverRadius:7, pointBackgroundColor:'#2f3818', pointBorderColor:'#f1f7d2', pointBorderWidth:2},
+  {type:'bar', label:'Tarde', data:[], borderColor:'#8fc8f0', backgroundColor:grad('rgba(143,200,240,1)','rgba(143,200,240,.35)'), borderRadius:6, barPercentage:.5, categoryPercentage:.45, borderWidth:0},
+  {type:'bar', label:'Ausente', data:[], borderColor:'#ff8a75', backgroundColor:grad('rgba(255,138,117,1)','rgba(255,138,117,.35)'), borderRadius:6, barPercentage:.5, categoryPercentage:.45, borderWidth:0}]},
   plugins:[scan],
   options:{animation:{duration:900, easing:'easeOutQuart'}, interaction:{mode:'index', intersect:false},
-    plugins:{legend:{display:false}, tooltip:{backgroundColor:'rgba(74,90,40,.96)', borderColor:'rgba(241,247,210,.45)', borderWidth:1,
+    plugins:{legend:{display:false}, tooltip:{backgroundColor:'rgba(31,36,20,.96)', borderColor:'rgba(241,247,210,.45)', borderWidth:1,
       titleColor:'#f1f7d2', bodyColor:'#e9edd8', padding:10, cornerRadius:8, displayColors:true, boxPadding:4}},
     scales:{x:{grid:{display:false}, border:{color:'rgba(241,247,210,.25)'}, ticks:{color:'#ffffff', font:{size:11, weight:'500'}, maxRotation:0, autoSkipPadding:10}},
             y:{beginAtZero:true, ticks:{precision:0, color:'#f1f4e4', font:{size:10}}, border:{display:false},
@@ -110,7 +110,7 @@ function paint(d, animate){
 const RANGES = {0: ['24 HORAS', 'Asistencia de hoy', 'vs. 24 h antes'], 7: ['7 DÍAS', 'Asistencia semanal', 'vs. semana anterior'],
                 30: ['30 DÍAS', 'Asistencia mensual', 'vs. mes anterior']};
 let range = 7;
-try { const r = +localStorage.getItem('trendDays'); if (r in RANGES) range = r; } catch (e) {}
+try { const r = localStorage.getItem('trendDays'); if (r !== null && +r in RANGES) range = +r; } catch (e) {}
 const $ = id => document.getElementById(id);
 const narrow = () => window.innerWidth < 576;
 const rate = (p, t) => (p + t) ? 100 * p / (p + t) : null;

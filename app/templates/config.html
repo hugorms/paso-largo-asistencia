@@ -39,7 +39,7 @@
   <div class="card"><div class="card-header">Feriados</div><div class="card-body border-bottom">
     <form method="post" action="/configuracion/feriado" class="row g-2"><div class="col-md-4"><input type="date" name="date" class="form-control" required></div>
       <div class="col-md-5"><input name="name" placeholder="Descripción (ej.: Día de la Independencia)" class="form-control"></div><div class="col-md-3"><button class="btn btn-primary w-100"><i class="bi bi-plus-lg"></i> Agregar</button></div></form></div>
-    <div class="table-responsive"><table class="table align-middle">{% for h in holidays %}<tr><td class="mono" style="width:140px">{{ h.date[8:10] }}/{{ h.date[5:7] }}/{{ h.date[:4] }}</td><td>{{ h.name or '—' }}</td><td class="text-end"><form method="post" action="/configuracion/feriado-eliminar"><input type="hidden" name="id" value="{{ h.id }}"><button class="btn btn-sm btn-outline-danger btn-icon" title="Quitar"><i class="bi bi-x-lg"></i></button></form></td></tr>{% else %}<tr><td class="empty"><i class="bi bi-calendar-heart"></i>Sin feriados registrados.</td></tr>{% endfor %}</table></div>
+    <div class="table-responsive"><table class="table align-middle">{% for h in holidays %}<tr><td class="mono" style="width:140px">{{ h.date[8:10] }}/{{ h.date[5:7] }}/{{ h.date[:4] }}</td><td>{{ h.name or '—' }}</td><td class="text-end"><form method="post" action="/configuracion/feriado-eliminar" onsubmit="return confirm('¿Quitar este feriado? Ese día volverá a contar faltas.')"><input type="hidden" name="id" value="{{ h.id }}"><button class="btn btn-sm btn-outline-danger btn-icon" title="Quitar"><i class="bi bi-x-lg"></i></button></form></td></tr>{% else %}<tr><td class="empty"><i class="bi bi-calendar-heart"></i>Sin feriados registrados.</td></tr>{% endfor %}</table></div>
   </div>
 </div>
 <div class="col-xl-4">
@@ -51,8 +51,8 @@
   <div class="card"><div class="card-header">General</div><div class="card-body">
     <form method="post" action="/configuracion/general">
       <div class="mb-3"><label class="form-label">Nombre de la empresa</label><input name="company" value="{{ settings.company or '' }}" class="form-control"><div class="form-text">Aparece en los reportes.</div></div>
-      <div class="mb-3"><label class="form-label">Revisión de respaldo cada</label><div class="input-group"><input type="number" min="2" name="poll_seconds" value="{{ settings.poll_seconds }}" class="form-control"><span class="input-group-text">segundos</span></div><div class="form-text">Las marcas llegan al instante; esto es por si la conexión en vivo se corta.</div></div>
-      <div class="mb-3"><label class="form-label">Separación mínima entre entrada y salida</label><div class="input-group"><input type="number" min="0" name="min_gap_minutes" value="{{ settings.min_gap_minutes }}" class="form-control"><span class="input-group-text">min</span></div><div class="form-text">Evita que dos marcas seguidas cuenten como entrada y salida.</div></div>
+      <div class="mb-3"><label class="form-label">Revisión de respaldo cada</label><div class="input-group"><input type="number" min="2" max="300" name="poll_seconds" value="{{ settings.poll_seconds }}" class="form-control"><span class="input-group-text">segundos</span></div><div class="form-text">Las marcas llegan al instante; esto es por si la conexión en vivo se corta.</div></div>
+      <div class="mb-3"><label class="form-label">Separación mínima entre entrada y salida</label><div class="input-group"><input type="number" min="0" max="60" name="min_gap_minutes" value="{{ settings.min_gap_minutes }}" class="form-control"><span class="input-group-text">min</span></div><div class="form-text">Evita que dos marcas seguidas cuenten como entrada y salida.</div></div>
       <button class="btn btn-primary"><i class="bi bi-check2"></i> Guardar</button>
     </form></div></div>
   <div class="card mt-3"><div class="card-header">Respaldo y migración</div><div class="card-body">

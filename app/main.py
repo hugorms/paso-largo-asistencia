@@ -15,7 +15,7 @@ from openpyxl import load_workbook
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import attendance, db, devices, reports
-from .isapi import MINOR_NAMES, ISAPIError
+from .isapi import MINOR_FAIL, MINOR_NAMES, ISAPIError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -26,7 +26,8 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 app.add_middleware(SessionMiddleware, secret_key=SECRET, max_age=12 * 3600, same_site="lax")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals.update(local_offset=devices.local_offset, hm=attendance.hm, colors=attendance.STATUS_COLORS, minor_names=MINOR_NAMES,
-                             days=reports.DAYS, today=date.today)
+                             days=reports.DAYS, today=date.today, clock_warnings=devices.CLOCK_WARNINGS,
+                             server_now=lambda: datetime.now().strftime("%d/%m/%Y %H:%M"))
 
 ROLES = {"admin": "Administrador", "supervisor": "Supervisor", "consulta": "Consulta"}
 LEAVE_KINDS = ["Vacaciones", "Permiso médico", "Permiso personal", "Licencia", "Comisión de servicio", "Otro"]
@@ -165,8 +166,10 @@ def dashboard_data(days: int = 7):
     today = date.today()
     rows = attendance.compute(today, today)
     count = lambda st: sum(1 for r in rows if r["status"] == st)
-    last = db.q("""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device FROM events ev
+    fails = ",".join(map(str, sorted(MINOR_FAIL)))
+    last = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device FROM events ev
                    LEFT JOIN employees e ON e.employee_no=ev.employee_no LEFT JOIN devices d ON d.id=ev.device_id
+                   WHERE ev.employee_no IS NOT NULL OR ev.minor IN ({fails})
                    ORDER BY ev.event_time DESC, ev.id DESC LIMIT 15""")
     for ev in last:
         ev["minor_name"] = MINOR_NAMES.get(ev["minor"], f"Evento {ev['minor']}") if ev["source"] == "equipo" else "Marca manual"
@@ -485,6 +488,12 @@ async def config_save(request: Request, what: str):
         db.ex("UPDATE employees SET department_id=NULL WHERE department_id=?", (f["id"],))
         db.ex("DELETE FROM departments WHERE id=?", (f["id"],))
     elif what == "horario":
+        if not (f.get("name") and f.get("start_time") and f.get("end_time")):
+            flash(request, "El horario necesita nombre, hora de entrada y hora de salida.", "danger")
+            return back("/configuracion")
+        if not all((f.get(k) or "0").isdigit() for k in ("tolerance_min", "lunch_min")):
+            flash(request, "La tolerancia y el almuerzo deben ser minutos (números enteros).", "danger")
+            return back("/configuracion")
         days = ",".join(sorted(v for k, v in (await request.form()).multi_items() if k == "days"))
         win = tuple(f.get(k) or None for k in ("in_from", "in_to", "out_from", "out_to"))
         if any(win) and not all(win):
@@ -514,10 +523,10 @@ async def config_save(request: Request, what: str):
     elif what == "feriado-eliminar":
         db.ex("DELETE FROM holidays WHERE id=?", (f["id"],))
     elif what == "general" and u["role"] == "admin":
-        limits = {"poll_seconds": (2, "La revisión de respaldo debe ser un número de 2 segundos o más."),
-                  "min_gap_minutes": (0, "La separación mínima debe ser un número de 0 minutos o más.")}
-        for k, (low, msg) in limits.items():
-            if k in f and not (f[k].isdigit() and int(f[k]) >= low):
+        limits = {"poll_seconds": (2, 300, "La revisión de respaldo debe ser de 2 a 300 segundos."),
+                  "min_gap_minutes": (0, 60, "La separación mínima debe ser de 0 a 60 minutos.")}
+        for k, (low, high, msg) in limits.items():
+            if k in f and not (f[k].isdigit() and low <= int(f[k]) <= high):
                 flash(request, msg, "danger")
                 return back("/configuracion")
         for k in ("company", "poll_seconds", "min_gap_minutes"):
@@ -546,12 +555,18 @@ async def backup_restore(request: Request):
     if not up or not getattr(up, "filename", ""):
         flash(request, "Elige el archivo .zip del respaldo.", "danger")
         return back("/configuracion")
+    raw = await up.read()
+    # Copia de lo que hay ahora, para poder deshacer la restauración
+    saved = db.DATA_DIR / "respaldos" / f"antes-de-restaurar-{datetime.now():%Y%m%d-%H%M%S}.zip"
+    saved.parent.mkdir(exist_ok=True)
+    saved.write_bytes(await run_in_threadpool(db.backup_zip))
     try:
-        emps, evs = await run_in_threadpool(db.restore_zip, await up.read())
+        emps, evs = await run_in_threadpool(db.restore_zip, raw)
     except ValueError as e:
         flash(request, str(e), "danger")
         return back("/configuracion")
-    db.audit(u["username"], "respaldo restaurado", f"{up.filename}: {emps} empleados, {evs} eventos")
+    db.audit(u["username"], "respaldo restaurado", f"{up.filename}: {emps} empleados, {evs} eventos; "
+                                                   f"lo anterior quedó en datos/respaldos/{saved.name}")
     poller.wake.set()
     # Los usuarios ahora son los del respaldo: se pide entrar de nuevo
     request.session.clear()
@@ -733,6 +748,9 @@ async def device_search(request: Request):
 async def device_save(request: Request):
     u = user(request, "admin")
     f = await form(request)
+    if not (f.get("port") or "80").isdigit() or not f.get("host") or not f.get("name"):
+        flash(request, "Revisa los datos del equipo: nombre, IP y puerto (número) son obligatorios.", "danger")
+        return back("/dispositivos")
     host, port = f["host"].strip().lower(), int(f.get("port") or 80)
     vals = [f["name"], host, port, 1 if f.get("https") else 0, f["username"],
             devices.local_offset(), int(f.get("door_no") or 1), f.get("direction") or "ambos",
@@ -795,9 +813,11 @@ async def device_action(request: Request, did: int, action: str):
                            f"({info.get('model')}, serie {info.get('serialNumber')}).")
         elif action == "hora":
             await run_in_threadpool(c.set_time, datetime.now(), devices.local_offset())
-            flash(request, f"Hora de {dev['name']} sincronizada con este servidor.")
+            devices.CLOCK_WARNINGS.pop(did, None)
+            flash(request, f"Hora de {dev['name']} sincronizada con este servidor ({datetime.now():%d/%m/%Y %H:%M}).")
         elif action == "eventos":
-            since = datetime.now() - timedelta(days=int((await form(request)).get("dias") or 31))
+            dias = (await form(request)).get("dias") or "31"
+            since = datetime.now() - timedelta(days=int(dias) if dias.isdigit() else 31)
             n = await run_in_threadpool(devices.pull_events, dev, since)
             flash(request, f"Descarga completa: {n} eventos nuevos.")
         elif action == "reiniciar":
@@ -805,7 +825,8 @@ async def device_action(request: Request, did: int, action: str):
             flash(request, f"{dev['name']} se está reiniciando.", "warning")
         elif action == "eliminar":
             db.ex("UPDATE devices SET active=0 WHERE id=?", (did,))
-            flash(request, "Dispositivo desactivado (su historial se conserva).")
+            devices.CLOCK_WARNINGS.pop(did, None)
+            flash(request, "Dispositivo desactivado: ya no se leen sus marcas (su historial se conserva).", "warning")
         elif action == "activar":
             db.ex("UPDATE devices SET active=1 WHERE id=?", (did,))
             poller.wake.set()

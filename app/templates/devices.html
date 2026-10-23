@@ -42,18 +42,19 @@
   {% if u.role == 'admin' %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="input-group input-group-sm mb-3" title="Si el equipo cambió de IP, escribe la nueva y pulsa «Probar y conectar»">
     <span class="input-group-text">IP</span><input name="host" value="{{ dv.host }}" class="form-control mono" required aria-label="IP del equipo"><span class="input-group-text mono">:{{ dv.port }}</span>
     <button class="btn btn-outline-primary"><i class="bi bi-plug"></i> Probar y conectar</button></form>{% endif %}
+  {% if clock_warnings.get(dv.id) %}<div class="alert alert-warning py-2 small mb-3"><i class="bi bi-clock-history"></i> {{ clock_warnings[dv.id] }}</div>{% endif %}
   {% if dv.last_error and not dv.online %}<div class="alert alert-danger py-2 small mb-3"><i class="bi bi-exclamation-triangle"></i> {{ dv.last_error }}
     {% if dv.active and dv.serial %}<div class="mt-1 text-body-secondary">Si cambiaste de red, el sistema lo busca solo cada 2 minutos por su número de serie. También puedes pulsar <b>Buscar biométrico</b> arriba o escribir la IP nueva.</div>{% endif %}</div>{% endif %}
   <div class="d-flex flex-wrap gap-2">
     {% if u.role == 'admin' %}
     <form method="post" action="/dispositivos/{{ dv.id }}/probar"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-plug"></i> Probar</button></form>
-    <form method="post" action="/dispositivos/{{ dv.id }}/hora"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock"></i> Sincronizar hora</button></form>
+    <form method="post" action="/dispositivos/{{ dv.id }}/hora" onsubmit="return confirm('Se pondrá en el equipo la hora de este servidor: {{ server_now() }}. ¿Es correcta?')"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock"></i> Sincronizar hora</button></form>
     <form method="post" action="/dispositivos/{{ dv.id }}/eventos"><input type="hidden" name="dias" value="31"><button class="btn btn-sm btn-outline-secondary" title="Descargar las marcaciones de los últimos 31 días"><i class="bi bi-download"></i> Descargar historial</button></form>
     <div class="dropdown ms-auto"><button class="btn btn-sm btn-outline-secondary btn-icon" data-bs-toggle="dropdown" title="Más"><i class="bi bi-three-dots"></i></button><div class="dropdown-menu dropdown-menu-end">
       <button class="dropdown-item" data-bs-toggle="collapse" data-bs-target="#e{{ dv.id }}"><i class="bi bi-pencil me-2"></i>Editar</button>
       <form method="post" action="/dispositivos/{{ dv.id }}/reiniciar" onsubmit="return confirm('¿Reiniciar el equipo? Dejará de marcar ~1 minuto.')"><button class="dropdown-item"><i class="bi bi-bootstrap-reboot me-2"></i>Reiniciar equipo</button></form>
       <div class="dropdown-divider"></div>
-      {% if dv.active %}<form method="post" action="/dispositivos/{{ dv.id }}/eliminar" onsubmit="return confirm('¿Desactivar este equipo?')"><button class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Desactivar</button></form>
+      {% if dv.active %}<form method="post" action="/dispositivos/{{ dv.id }}/eliminar" onsubmit="return confirm('¿Desactivar este equipo? El sistema dejará de leer sus marcas hasta que lo vuelvas a activar.')"><button class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Desactivar</button></form>
       {% else %}<form method="post" action="/dispositivos/{{ dv.id }}/activar"><button class="dropdown-item"><i class="bi bi-power me-2"></i>Volver a activar</button></form>{% endif %}
     </div></div>
     {% endif %}

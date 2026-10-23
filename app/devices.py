@@ -301,15 +301,31 @@ def sync_faces(dev):
     return len(new)
 
 
+# Equipos cuya hora no se corrigió sola porque la del servidor parece incorrecta (id -> aviso)
+CLOCK_WARNINGS = {}
+
+
 def check_clock(dev, max_drift=120):
-    """Si el reloj del equipo difiere más de max_drift segundos de esta PC, lo corrige."""
+    """Si el reloj del equipo difiere más de max_drift segundos de esta PC, lo corrige.
+    Si la hora del servidor parece mala (año viejo, o muy distinta a la de un equipo con fecha válida,
+    p. ej. tras un corte de luz sin internet), no la copia: avisa para no marcar todo con hora errónea."""
     c = client(dev)
     info = c.get_time()
     t = info.get("localTime", "")
     if not t:
         return None
-    drift = (datetime.fromisoformat(_local(t)) - datetime.now()).total_seconds()
+    dev_time, now = datetime.fromisoformat(_local(t)), datetime.now()
+    drift = (dev_time - now).total_seconds()
     wrong_tz = info.get("timeZone") and info["timeZone"] != posix_tz(local_offset())
+    if now.year < 2025 or (abs(drift) > 6 * 3600 and dev_time.year >= 2025):
+        msg = (f"La hora del servidor ({now:%d/%m/%Y %H:%M}) y la del equipo ({dev_time:%d/%m/%Y %H:%M}) no coinciden. "
+               "No se corrigió sola por seguridad: revisa la hora del servidor y usa «Sincronizar hora».")
+        if CLOCK_WARNINGS.get(dev["id"]) != msg:
+            log.warning("%s: %s", dev["name"], msg)
+            db.audit("sistema", "hora del equipo NO corregida", f"{dev['name']}: desfase {int(drift)} s")
+        CLOCK_WARNINGS[dev["id"]] = msg
+        return 0
+    CLOCK_WARNINGS.pop(dev["id"], None)
     if abs(drift) > max_drift or wrong_tz:
         c.set_time(datetime.now(), local_offset())
         db.audit("sistema", "hora del equipo corregida",

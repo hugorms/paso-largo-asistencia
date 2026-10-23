@@ -207,7 +207,7 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
 }
 
 /* ---------- Gráfico futurista ---------- */
-.card-future { background: radial-gradient(120% 140% at 0% 0%, #9aac62 0%, #85984d 55%, #7a8d44 100%);
+.card-future { background: radial-gradient(120% 140% at 0% 0%, #3d4a1f 0%, #343f1b 55%, #2f3818 100%);
                border: 1px solid rgba(241, 247, 210, .22); color: #e9edd8; overflow: hidden; position: relative;
                box-shadow: 0 0 0 1px rgba(241, 247, 210, .05), 0 12px 30px -12px rgba(15, 19, 8, .6), inset 0 1px 0 rgba(255, 255, 255, .05); }
 .card-future::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
@@ -243,8 +243,8 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
 .fx-ring { stroke: #f1f7d2; stroke-linecap: round; stroke-dasharray: 125.66; stroke-dashoffset: 125.66;
            filter: drop-shadow(0 0 4px rgba(241, 247, 210, .8)); transition: stroke-dashoffset .9s cubic-bezier(.65, 0, .35, 1); }
 .fx-k { font-size: 1.35rem; font-weight: 700; color: #f1f7d2; font-variant-numeric: tabular-nums; line-height: 1.1; }
-.fx-k.fx-warn { color: #5aa9e6; }
-.fx-k.fx-bad { color: #f26b55; }
+.fx-k.fx-warn { color: #8fc8f0; }
+.fx-k.fx-bad { color: #ff8a75; }
 .fx-l { font-size: .66rem; text-transform: uppercase; letter-spacing: .08em; color: #dfe4c8; }
 .fx-d { font-size: .68rem; font-weight: 600; color: #e9edd8; opacity: .85; min-height: 1em; font-variant-numeric: tabular-nums; }
 .fx-d.up { color: #f1f7d2; opacity: 1; }
@@ -260,6 +260,43 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
 .fx-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: .4rem; vertical-align: -1px; }
 .fx-mix { display: flex; gap: 2px; flex: 0 1 240px; height: 6px; border-radius: 99px; overflow: hidden; background: rgba(241, 247, 210, .15); }
 .fx-mix b { flex: 0 0 0; flex-grow: 0; transition: flex-grow .6s; }
-#fx-mix-p { background: #f1f7d2; box-shadow: 0 0 8px #f1f7d2; } #fx-mix-t { background: #5aa9e6; } #fx-mix-a { background: #f26b55; }
+#fx-mix-p { background: #f1f7d2; box-shadow: 0 0 8px #f1f7d2; } #fx-mix-t { background: #8fc8f0; } #fx-mix-a { background: #ff8a75; }
 @media (max-width: 767.98px) { .fx-kpis { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 575.98px) { .fx-k { font-size: 1.1rem; } .fx-seg button { padding: .35rem .65rem; } }
+
+/* ---------- Teléfono: tablas como tarjetas, todo dentro de la pantalla ---------- */
+@media (max-width: 767.98px) {
+  .table-stack thead { display: none; }
+  .table-stack, .table-stack tbody, .table-stack tr, .table-stack td { display: block; width: 100%; }
+  .table-stack tr { padding: .55rem .95rem; border-bottom: 1px solid #efefe6; }
+  .table-stack tbody tr:last-child { border-bottom: 0; }
+  .table > :not(caption) > * > *.stk { display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+                                        padding: .18rem 0; border: 0; text-align: right; min-height: 1.6rem; }
+  .table-stack td.stk::before { content: attr(data-label); flex: none; max-width: 45%; text-align: left; color: var(--pl-muted);
+                                font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .table-stack td.stk[data-label=""]::before { display: none; }
+  .table-stack td.stk:first-child { font-weight: 600; }
+  .table-stack td.stk > form, .table-stack td.stk > .d-flex { justify-content: flex-end; }
+  .table-stack td.empty { display: block; text-align: center; }
+  .table-responsive { overflow-x: visible; }
+
+  /* panel: indicadores compactos de 3 en fila */
+  .stat-col { flex: 0 0 auto; width: 33.333%; }
+  .stat { padding: .6rem .7rem; }
+  .stat .ico { display: none; }
+  .stat .label { font-size: .7rem; line-height: 1.2; }
+  .stat .value { font-size: 1.4rem; margin-top: .1rem; }
+  .last-shot { max-height: 240px; aspect-ratio: 4 / 3; }
+  .page-actions { width: 100%; }
+  .page-actions > .btn, .page-actions > form { flex: 1 1 auto; }
+  .page-actions > form > .btn { width: 100%; }
+}
+@media (max-width: 575.98px) {
+  .fx-head > div:first-child { width: 100%; }
+  .fx-seg { width: 100%; }
+  .fx-seg button { padding: .4rem .3rem; }
+  .fx-kpis { padding: .3rem .8rem .4rem; gap: .45rem; }
+  .fx-foot { padding: .3rem .9rem .9rem; }
+  .fx-mix { flex-basis: 100%; }
+  .card-header { flex-wrap: wrap; }
+}

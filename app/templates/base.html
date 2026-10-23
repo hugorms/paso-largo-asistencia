@@ -5,7 +5,7 @@
 <title>{% block title %}Asistencia{% endblock %} · Paso Largo</title>
 <link href="/static/bootstrap.min.css" rel="stylesheet">
 <link href="/static/bootstrap-icons.min.css" rel="stylesheet">
-<link href="/static/tema.css?v=9" rel="stylesheet">
+<link href="/static/tema.css?v=10" rel="stylesheet">
 </head>
 <body>
 {% macro brand() %}
@@ -78,6 +78,19 @@ document.querySelectorAll('[data-live][id]').forEach(el => {
       if (fresh && fresh.innerHTML !== el.innerHTML) el.innerHTML = fresh.innerHTML;
     } catch (e) {}
   }, 2000);
+});
+// En el teléfono las tablas se ven como tarjetas: cada celda lleva el título de su columna
+function stackTable(t){
+  const heads = [...t.querySelectorAll('thead th')].map(th => th.textContent.trim());
+  if (!heads.length) return;
+  t.classList.add('table-stack');
+  t.querySelectorAll('tbody tr').forEach(tr => { let i = 0;
+    for (const td of tr.children) { if (td.colSpan > 1 || td.classList.contains('empty')) { i += td.colSpan; continue; }
+      td.dataset.label = heads[i] || ''; td.classList.add('stk'); i += 1; } });
+}
+document.querySelectorAll('table').forEach(t => {
+  stackTable(t);
+  new MutationObserver(() => stackTable(t)).observe(t, {childList: true, subtree: true});
 });
 function toggleNav(){ document.getElementById('sidebar').classList.toggle('open'); document.getElementById('backdrop').classList.toggle('show'); }
 </script>
