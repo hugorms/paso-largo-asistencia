@@ -5,7 +5,7 @@
 <title>{% block title %}Asistencia{% endblock %} · Paso Largo</title>
 <link href="/static/bootstrap.min.css" rel="stylesheet">
 <link href="/static/bootstrap-icons.min.css" rel="stylesheet">
-<link href="/static/tema.css?v=11" rel="stylesheet">
+<link href="/static/tema.css?v=12" rel="stylesheet">
 </head>
 <body>
 {% macro brand() %}
@@ -41,6 +41,7 @@
       <a href="/cuenta" title="Mi cuenta" class="fs-5"><i class="bi bi-gear"></i></a>
       <a href="/logout" title="Salir" class="fs-5"><i class="bi bi-box-arrow-right"></i></a>
     </div>
+    <div class="side-version" title="Fecha de la última actualización instalada">Versión: {{ version }}</div>
   </nav>
   <main class="main">
     {% for kind, msg in flashes %}

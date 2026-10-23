@@ -15,6 +15,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+# Fecha de esta versión (se muestra al pie del menú para saber si ya llegó una actualización)
+RUN date +"%d/%m/%Y %H:%M" > /app/VERSION
 
 # Base de datos, fotos y clave de sesión: montar un volumen aquí para no perderlos en cada despliegue
 VOLUME ["/data"]

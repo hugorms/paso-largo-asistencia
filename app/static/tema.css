@@ -139,6 +139,7 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
 .side-user .role { color: #a9ae92; font-size: .74rem; }
 .side-user a { color: #c9cfae; }
 .side-user a:hover { color: #fff; }
+.side-version { font-size: .68rem; color: #8d9374; padding: 0 1.1rem .7rem; font-variant-numeric: tabular-nums; }
 .main { flex: 1; min-width: 0; padding: 1.6rem 2rem 2.5rem; }
 .topbar { display: none; }
 

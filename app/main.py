@@ -29,6 +29,10 @@ templates.env.globals.update(local_offset=devices.local_offset, hm=attendance.hm
                              days=reports.DAYS, today=date.today, clock_warnings=devices.CLOCK_WARNINGS,
                              server_now=lambda: datetime.now().strftime("%d/%m/%Y %H:%M"))
 
+# En el servidor la imagen trae /app/VERSION con la fecha del despliegue; en la PC no existe
+_version_file = Path(__file__).parent.parent / "VERSION"
+templates.env.globals["version"] = _version_file.read_text().strip() if _version_file.exists() else "local"
+
 ROLES = {"admin": "Administrador", "supervisor": "Supervisor", "consulta": "Consulta"}
 LEAVE_KINDS = ["Vacaciones", "Permiso médico", "Permiso personal", "Licencia", "Comisión de servicio", "Otro"]
 poller = devices.Poller()
