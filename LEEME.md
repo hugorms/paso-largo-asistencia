@@ -104,3 +104,10 @@ Si Dokploy está en un VPS en internet, no verá la red local del terminal: hace
 entre el VPS y la red del terminal, o instalar Dokploy en una PC/servidor dentro de esa misma red.
 
 La zona horaria se define con la variable `TZ` (por defecto `America/Caracas`). Usa una sola réplica: el lector de eventos del equipo no debe duplicarse.
+
+### Servidor del restaurante (192.168.1.40)
+
+En Dokploy el servicio Compose usa el proveedor **Git** con `https://github.com/hugorms/paso-largo-asistencia.git`,
+rama `main` y ruta `./servidor/docker-compose.dokploy.yml`. Los datos viven en `/home/paso_largo/paso-largo/datos`.
+Para actualizar basta con hacer `git push` a `main`: el servidor revisa GitHub cada 2 minutos y despliega solo
+(script `~/paso-largo-auto-deploy.sh` en cron; registro en `~/paso-largo-auto-deploy.log`).
