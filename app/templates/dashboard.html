@@ -50,8 +50,6 @@
         <span class="d-flex align-items-center gap-2"><span class="dot {{ 'dot-on' if dv.online else 'dot-off' }}"></span>{{ dv.name }}</span>
         <span class="d-flex align-items-center gap-2">
           <span class="small text-secondary text-truncate" style="max-width:140px">{{ 'En línea' if dv.online else (dv.last_error or 'Sin conexión') }}</span>
-          {% if u.role in ['admin','supervisor'] %}<form method="post" action="/dispositivos/{{ dv.id }}/puerta-abrir" onsubmit="return confirm('¿Abrir la puerta de {{ dv.name }}?')">
-            <button class="btn btn-sm btn-outline-primary" title="Abrir puerta"><i class="bi bi-door-open"></i> Abrir</button></form>{% endif %}
         </span></li>
       {% else %}<li class="list-group-item empty"><i class="bi bi-cpu"></i>No hay equipos. <a href="/dispositivos">Agregar uno</a></li>{% endfor %}
       </ul>

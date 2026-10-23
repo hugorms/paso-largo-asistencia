@@ -8,7 +8,7 @@
   <div class="col-6 col-md-2"><label class="form-label">Hasta</label><input type="date" name="hasta" value="{{ hasta }}" class="form-control"></div>
   <div class="col-md-3"><label class="form-label">Empleado</label><select name="emp" class="form-select"><option value="">Todos</option>{% for e in emps %}<option value="{{ e.employee_no }}" {{ 'selected' if emp == e.employee_no }}>{{ e.name }}</option>{% endfor %}</select></div>
   <div class="col-md-2"><label class="form-label">Equipo</label><select name="dev" class="form-select"><option value="">Todos</option>{% for dv in devs %}<option value="{{ dv.id }}" {{ 'selected' if dev|string == dv.id|string }}>{{ dv.name }}</option>{% endfor %}</select></div>
-  <div class="col-md-2"><div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="todos" value="1" id="todos" {{ 'checked' if todos }}><label class="form-check-label" for="todos">Incluir eventos de puerta</label></div></div>
+  <div class="col-md-2"><div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="todos" value="1" id="todos" {{ 'checked' if todos }}><label class="form-check-label" for="todos">Incluir otros eventos del equipo</label></div></div>
   <div class="col-md-1"><button class="btn btn-primary w-100">Ver</button></div>
 </form>
 </div>

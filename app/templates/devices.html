@@ -45,12 +45,6 @@
   {% if dv.last_error and not dv.online %}<div class="alert alert-danger py-2 small mb-3"><i class="bi bi-exclamation-triangle"></i> {{ dv.last_error }}
     {% if dv.active and dv.serial %}<div class="mt-1 text-body-secondary">Si cambiaste de red, el sistema lo busca solo cada 2 minutos por su número de serie. También puedes pulsar <b>Buscar biométrico</b> arriba o escribir la IP nueva.</div>{% endif %}</div>{% endif %}
   <div class="d-flex flex-wrap gap-2">
-    {% if u.role in ['admin','supervisor'] %}
-    <form method="post" action="/dispositivos/{{ dv.id }}/puerta-abrir" onsubmit="return confirm('¿Abrir la puerta?')"><button class="btn btn-primary btn-sm"><i class="bi bi-door-open"></i> Abrir puerta</button></form>
-    <div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">Puerta</button><div class="dropdown-menu">
-      {% for a,l,i in [('puerta-siempre-abierta','Mantener abierta','unlock'),('puerta-siempre-cerrada','Bloquear (mantener cerrada)','lock'),('puerta-normal','Volver a modo normal','arrow-counterclockwise')] %}
-      <form method="post" action="/dispositivos/{{ dv.id }}/{{ a }}"><button class="dropdown-item"><i class="bi bi-{{ i }} me-2"></i>{{ l }}</button></form>{% endfor %}</div></div>
-    {% endif %}
     {% if u.role == 'admin' %}
     <form method="post" action="/dispositivos/{{ dv.id }}/probar"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-plug"></i> Probar</button></form>
     <form method="post" action="/dispositivos/{{ dv.id }}/hora"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock"></i> Sincronizar hora</button></form>

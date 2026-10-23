@@ -770,7 +770,7 @@ async def device_save(request: Request):
 
 @app.post("/dispositivos/{did}/{action}")
 async def device_action(request: Request, did: int, action: str):
-    u = user(request, "admin", "supervisor") if action.startswith("puerta") else user(request, "admin")
+    u = user(request, "admin")
     dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
     if not dev:
         flash(request, "Ese equipo ya no existe.", "danger")
@@ -793,11 +793,6 @@ async def device_action(request: Request, did: int, action: str):
             poller.wake.set()
             flash(request, f"Conectado: {dev['name']} ahora está en {host.lower()} "
                            f"({info.get('model')}, serie {info.get('serialNumber')}).")
-        elif action.startswith("puerta-"):
-            cmd = {"puerta-abrir": "open", "puerta-cerrar": "close", "puerta-siempre-abierta": "alwaysOpen",
-                   "puerta-normal": "close", "puerta-siempre-cerrada": "alwaysClose"}[action]
-            await run_in_threadpool(c.door, cmd, dev["door_no"] or 1)
-            flash(request, f"Comando '{cmd}' enviado a la puerta de {dev['name']}.")
         elif action == "hora":
             await run_in_threadpool(c.set_time, datetime.now(), devices.local_offset())
             flash(request, f"Hora de {dev['name']} sincronizada con este servidor.")

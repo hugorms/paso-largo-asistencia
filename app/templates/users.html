@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-head"><div><h1>Usuarios del sistema</h1><div class="sub">Quién puede entrar a Paso Largo y qué puede hacer</div></div></div>
 <div class="row g-3 mb-3">
-  {% for k, i, t in [('admin','shield-check','Todo, incluidos equipos y usuarios'),('supervisor','person-gear','Empleados, asistencia, permisos, horarios y abrir puertas'),('consulta','eye','Solo ver panel, asistencia y reportes')] %}
+  {% for k, i, t in [('admin','shield-check','Todo, incluidos equipos y usuarios'),('supervisor','person-gear','Empleados, asistencia, permisos y horarios'),('consulta','eye','Solo ver panel, asistencia y reportes')] %}
   <div class="col-md-4"><div class="card stat"><div class="d-flex gap-3 align-items-center"><div class="ico ico-primary"><i class="bi bi-{{ i }}"></i></div><div><div class="fw-semibold">{{ roles[k] }}</div><div class="small text-secondary">{{ t }}</div></div></div></div></div>
   {% endfor %}
 </div>
