@@ -23,13 +23,17 @@ class ISAPIError(Exception):
     pass
 
 
+class ISAPIConnError(ISAPIError):
+    """El equipo no responde en esa IP (apagado, desconectado o cambió de IP)."""
+
+
 class ISAPIClient:
     def __init__(self, host, user, password, port=80, https=False, timeout=20.0):
         scheme = "https" if https else "http"
         default = 443 if https else 80
         self.base = f"{scheme}://{host}" + ("" if int(port) == default else f":{port}")
         self.auth = httpx.DigestAuth(user, password)
-        self.timeout = timeout
+        self.timeout = httpx.Timeout(timeout, connect=5.0)  # si no está en la red se sabe rápido
         self.verify = False  # los equipos usan certificados autofirmados
 
     # ------------------------------------------------------------ helpers
@@ -38,7 +42,7 @@ class ISAPIClient:
             with httpx.Client(auth=self.auth, timeout=self.timeout, verify=self.verify) as c:
                 r = c.request(method, self.base + path, **kw)
         except httpx.HTTPError as e:
-            raise ISAPIError(f"No se pudo conectar con el equipo: {e}") from e
+            raise ISAPIConnError(f"No se pudo conectar con el equipo: {e}") from e
         if r.status_code == 401:
             raise ISAPIError("Usuario o contraseña del equipo incorrectos (401)")
         if r.status_code >= 400:
@@ -147,6 +151,13 @@ class ISAPIClient:
         d = r.json() if r.content else {}
         if d.get("statusCode") not in (None, 1):
             raise ISAPIError(f"Rostro rechazado por el equipo: {d.get('subStatusCode') or d.get('errorMsg')}")
+
+    def face_url(self, employee_no):
+        """URL de la foto de rostro registrada en el equipo para ese empleado (None si no tiene)."""
+        d = self._json("POST", "/ISAPI/Intelligent/FDLib/FDSearch?format=json",
+                       {"searchResultPosition": 0, "maxResults": 1, "faceLibType": "blackFD", "FDID": "1",
+                        "FPID": str(employee_no)})
+        return next((m.get("faceURL") for m in d.get("MatchList") or [] if m.get("faceURL")), None)
 
     def delete_face(self, employee_no):
         self._json("PUT", "/ISAPI/Intelligent/FDLib/FDSearch/Delete?format=json&FDID=1&faceLibType=blackFD",

@@ -24,7 +24,8 @@
   <tbody>
   {% for e in emps %}
   <tr class="{{ 'opacity-50' if not e.active }}">
-    <td style="width:56px">{% if e.photo %}<img src="/fotos/{{ e.photo }}" class="avatar" alt="">{% else %}<span class="avatar-ph">{{ e.name[:1]|upper }}</span>{% endif %}</td>
+    <td style="width:56px">{% if e.photo or e.face_at %}<img src="/empleados/{{ e.id }}/rostro" class="avatar" alt="" loading="lazy" data-photo="/empleados/{{ e.id }}/rostro" data-label="Foto registrada" data-caption="{{ e.name }}"
+      onerror="this.outerHTML='<span class=&quot;avatar-ph&quot;>{{ e.name[:1]|upper|e }}</span>'">{% else %}<span class="avatar-ph">{{ e.name[:1]|upper }}</span>{% endif %}</td>
     <td class="mono text-secondary">{{ e.employee_no }}</td>
     <td class="fw-medium">{{ e.name }}</td>
     <td>{{ e.department or '—' }}</td><td>{{ e.position or '—' }}</td><td>{{ e.schedule or '—' }}</td>

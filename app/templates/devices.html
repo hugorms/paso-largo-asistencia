@@ -1,8 +1,25 @@
 {% extends "base.html" %}{% block title %}Dispositivos{% endblock %}
 {% block content %}
 <div class="page-head"><div><h1>Dispositivos</h1><div class="sub">Terminales de reconocimiento facial conectados por ISAPI</div></div>
-{% if u.role == 'admin' %}<div class="page-actions"><button class="btn btn-primary" data-bs-toggle="collapse" data-bs-target="#new"><i class="bi bi-plus-lg"></i> Agregar equipo</button></div>{% endif %}</div>
-{% if u.role == 'admin' %}<div class="collapse {{ 'show' if not devs }}" id="new"><div class="card mb-3"><div class="card-header">Nuevo equipo</div><div class="card-body">
+{% if u.role == 'admin' %}<div class="page-actions">
+  <form method="post" action="/dispositivos/buscar" onsubmit="this.querySelector('button').disabled=true;this.querySelector('span').textContent='Buscando… (unos 10 s)'"><button class="btn btn-primary" title="Busca los biométricos conectados a la red de esta PC y reconecta los que cambiaron de IP"><i class="bi bi-search"></i> <span>Buscar biométrico</span></button></form>
+  {% if devs %}<button class="btn btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#new"><i class="bi bi-plus-lg"></i> Registrar otro equipo</button>{% endif %}</div>{% endif %}</div>
+{% if searched %}<div class="card mb-3"><div class="card-header"><span><i class="bi bi-search me-1"></i> Biométricos encontrados en la red</span><span class="small text-secondary">Red de esta PC: {{ nets|join(', ') or 'sin conexión' }}</span></div>
+{% if found %}<div class="table-responsive"><table class="table table-sm align-middle mb-0">
+  <thead><tr><th>IP</th><th>Modelo</th><th>N° de serie</th><th>Estado</th></tr></thead><tbody>
+  {% for f in found %}<tr>
+    <td class="mono">{{ f.ip }}</td><td>{{ f.model or '—' }}</td><td class="mono small">{{ f.serial or '—' }}</td>
+    <td>{% if f.status == 'registrado' %}<span class="badge text-bg-success">Es «{{ f.dev_name }}» — ya conectado</span>
+      {% elif f.status == 'movido' %}<span class="badge text-bg-success">Es «{{ f.dev_name }}» — {{ f.note }}</span>
+      {% elif f.status == 'sin_acceso' %}<span class="badge text-bg-warning">Es «{{ f.dev_name }}»</span> <span class="small">{{ f.note }}</span>
+      {% else %}<span class="small text-secondary">No registrado{{ '' if f.serial else ' (no se pudo leer con las claves guardadas)' }}.</span>
+        {% for dv in devs if not dv.online %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="d-inline"><input type="hidden" name="host" value="{{ f.ip }}"><button class="btn btn-sm btn-outline-primary ms-1">Usar para «{{ dv.name }}»</button></form>{% endfor %}
+      {% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+{% else %}<div class="card-body small">No respondió ningún equipo. Revisa que el biométrico esté encendido y conectado al mismo router o switch que esta PC.</div>{% endif %}
+</div>{% endif %}
+{% if u.role == 'admin' %}<div class="collapse {{ 'show' if not devs }}" id="new"><div class="card mb-3"><div class="card-header">{{ 'Otro equipo (distinto a los de abajo)' if devs else 'Registrar el equipo' }}</div><div class="card-body">
+  {% if devs %}<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> Los equipos ya registrados aparecen abajo con sus datos: úsalos desde ahí. Si pones la IP de uno de ellos, se actualiza ese mismo en vez de crear otro.</div>{% endif %}
   {% set dv = {} %}{% include "_device_form.html" %}</div></div></div>{% endif %}
 <div class="row g-3">
 {% for dv in devs %}
@@ -15,13 +32,18 @@
   <div class="card-body">
   <dl class="row small mb-3 gy-1">
     <dt class="col-5 text-secondary fw-normal">Dirección</dt><dd class="col-7 mb-0 mono">{{ dv.host }}:{{ dv.port }}</dd>
+    <dt class="col-5 text-secondary fw-normal">N° de serie</dt><dd class="col-7 mb-0 mono small">{{ dv.serial or '—' }}</dd>
     <dt class="col-5 text-secondary fw-normal">Modelo</dt><dd class="col-7 mb-0">{{ dv.model or '—' }}</dd>
     <dt class="col-5 text-secondary fw-normal">Firmware</dt><dd class="col-7 mb-0">{{ dv.firmware or '—' }}</dd>
     <dt class="col-5 text-secondary fw-normal">Última conexión</dt><dd class="col-7 mb-0 mono">{{ dv.last_seen or 'nunca' }}</dd>
     <dt class="col-5 text-secondary fw-normal">Último evento</dt><dd class="col-7 mb-0 mono">{{ (dv.last_event_time or '—').replace('T',' ') }}</dd>
     <dt class="col-5 text-secondary fw-normal">Eventos guardados</dt><dd class="col-7 mb-0 mono">{{ dv.n_events }}</dd>
   </dl>
-  {% if dv.last_error and not dv.online %}<div class="alert alert-danger py-2 small mb-3"><i class="bi bi-exclamation-triangle"></i> {{ dv.last_error }}</div>{% endif %}
+  {% if u.role == 'admin' %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="input-group input-group-sm mb-3" title="Si el equipo cambió de IP, escribe la nueva y pulsa «Probar y conectar»">
+    <span class="input-group-text">IP</span><input name="host" value="{{ dv.host }}" class="form-control mono" required aria-label="IP del equipo"><span class="input-group-text mono">:{{ dv.port }}</span>
+    <button class="btn btn-outline-primary"><i class="bi bi-plug"></i> Probar y conectar</button></form>{% endif %}
+  {% if dv.last_error and not dv.online %}<div class="alert alert-danger py-2 small mb-3"><i class="bi bi-exclamation-triangle"></i> {{ dv.last_error }}
+    {% if dv.active and dv.serial %}<div class="mt-1 text-body-secondary">Si cambiaste de red, el sistema lo busca solo cada 2 minutos por su número de serie. También puedes pulsar <b>Buscar biométrico</b> arriba o escribir la IP nueva.</div>{% endif %}</div>{% endif %}
   <div class="d-flex flex-wrap gap-2">
     {% if u.role in ['admin','supervisor'] %}
     <form method="post" action="/dispositivos/{{ dv.id }}/puerta-abrir" onsubmit="return confirm('¿Abrir la puerta?')"><button class="btn btn-primary btn-sm"><i class="bi bi-door-open"></i> Abrir puerta</button></form>
@@ -37,7 +59,8 @@
       <button class="dropdown-item" data-bs-toggle="collapse" data-bs-target="#e{{ dv.id }}"><i class="bi bi-pencil me-2"></i>Editar</button>
       <form method="post" action="/dispositivos/{{ dv.id }}/reiniciar" onsubmit="return confirm('¿Reiniciar el equipo? Dejará de marcar ~1 minuto.')"><button class="dropdown-item"><i class="bi bi-bootstrap-reboot me-2"></i>Reiniciar equipo</button></form>
       <div class="dropdown-divider"></div>
-      <form method="post" action="/dispositivos/{{ dv.id }}/eliminar" onsubmit="return confirm('¿Desactivar este equipo?')"><button class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Desactivar</button></form>
+      {% if dv.active %}<form method="post" action="/dispositivos/{{ dv.id }}/eliminar" onsubmit="return confirm('¿Desactivar este equipo?')"><button class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Desactivar</button></form>
+      {% else %}<form method="post" action="/dispositivos/{{ dv.id }}/activar"><button class="dropdown-item"><i class="bi bi-power me-2"></i>Volver a activar</button></form>{% endif %}
     </div></div>
     {% endif %}
   </div>

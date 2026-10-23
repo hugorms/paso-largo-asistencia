@@ -13,15 +13,18 @@
 </form>
 </div>
 <div class="table-responsive"><table class="table table-hover align-middle">
-<thead><tr><th>Fecha y hora</th><th>N°</th><th>Empleado</th><th>Evento</th><th>Verificación</th><th>Tipo</th><th>Equipo</th><th>Foto</th></tr></thead>
-<tbody>
+<thead><tr><th>Fecha y hora</th><th>N°</th><th>Empleado</th><th>Evento</th><th>Verificación</th><th>Tipo</th><th>Equipo</th><th>Cuenta como</th><th>Foto</th></tr></thead>
+<tbody id="evrows" {{ 'data-live' if hasta >= today() }}>
 {% for ev in rows %}
 <tr><td class="mono">{{ ev.event_time[8:10] }}/{{ ev.event_time[5:7] }}/{{ ev.event_time[:4] }} {{ ev.event_time[11:19] }}</td><td class="mono text-secondary">{{ ev.employee_no or '—' }}</td><td>{{ ev.emp_name or ev.name or '—' }}</td>
 <td><span class="badge text-bg-{{ 'success' if ev.valid else 'secondary' }}">{{ 'Marca manual' if ev.source == 'manual' else minor_names.get(ev.minor, 'Evento ' ~ ev.major ~ '/' ~ ev.minor) }}</span></td>
 <td>{{ {'face':'Rostro','card':'Tarjeta','fingerPrint':'Huella','manual':'Manual','invalid':'—'}.get(ev.verify_mode, ev.verify_mode or '—') }}</td><td>{{ {'checkIn':'Entrada','checkOut':'Salida','breakOut':'Salida descanso','breakIn':'Regreso descanso'}.get(ev.attendance_status, ev.attendance_status or '—') }}</td>
 <td>{{ ev.device or 'Manual' }}</td>
-<td>{% if ev.picture_url %}<a href="/eventos/{{ ev.id }}/foto" target="_blank" class="btn btn-sm btn-outline-secondary btn-icon" title="Ver foto"><i class="bi bi-image"></i></a>{% else %}—{% endif %}</td></tr>
-{% else %}<tr><td colspan="8" class="empty"><i class="bi bi-clock-history"></i>Sin marcaciones en este rango.</td></tr>{% endfor %}
+<td>{% if ev.counts_as %}<span class="badge text-bg-{{ 'light' if ev.counts_as == 'No cuenta' else 'success' }}" {{ 'title="Se guarda, pero no es ni la primera ni la última marca del día"'|safe if ev.counts_as == 'No cuenta' }}>{{ ev.counts_as }}</span>{% else %}—{% endif %}
+  {% if ev.source == 'manual' and u.role in ['admin','supervisor'] %}<form method="post" action="/eventos/{{ ev.id }}/eliminar" class="d-inline" onsubmit="return confirm('¿Borrar esta marca manual?')"><button class="btn btn-sm btn-link text-danger p-0 ms-1" title="Borrar marca manual"><i class="bi bi-trash"></i></button></form>{% endif %}</td>
+<td>{% if ev.picture_url %}<button type="button" class="ev-thumb" title="Ver foto en grande" data-photo="/eventos/{{ ev.id }}/foto" data-ref="{{ '/empleados/%s/rostro'|format(ev.emp_id) if ev.emp_id }}"
+  data-caption="{{ ev.emp_name or ev.name or 'Desconocido' }} · {{ ev.event_time[8:10] }}/{{ ev.event_time[5:7] }} {{ ev.event_time[11:19] }} · {{ ev.device or '' }}"><img src="/eventos/{{ ev.id }}/foto" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'bi bi-image'}))"></button>{% else %}—{% endif %}</td></tr>
+{% else %}<tr><td colspan="9" class="empty"><i class="bi bi-clock-history"></i>Sin marcaciones en este rango.</td></tr>{% endfor %}
 </tbody></table></div></div>
 {% if rows|length == 1000 %}<p class="small text-secondary mt-2">Se muestran las 1000 más recientes; acota el rango.</p>{% endif %}
 {% endblock %}

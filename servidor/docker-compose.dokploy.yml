@@ -1,0 +1,19 @@
+# Paso Largo en Dokploy (servidor del restaurante), desplegado desde GitHub.
+# En Dokploy: servicio Compose, proveedor Git/GitHub, ruta del compose: ./servidor/docker-compose.dokploy.yml
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: paso-largo-asistencia:latest
+    container_name: paso-largo
+    # Arranca solo al prender el servidor y se reinicia si se cae
+    restart: unless-stopped
+    # Red del servidor: hace falta para buscar el biométrico (SADP por multicast + barrido de la subred)
+    network_mode: host
+    environment:
+      - TZ=America/Caracas
+      - ASISTENCIA_DATA=/data
+    volumes:
+      # Base de datos, fotos y clave de sesión: fuera de la imagen, no se pierden al redesplegar
+      - /home/paso_largo/paso-largo/datos:/data

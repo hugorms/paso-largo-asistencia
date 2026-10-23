@@ -116,6 +116,14 @@ def get_setting(key, default=None):
     return r["value"] if r else default
 
 
+def int_setting(key, default):
+    """Ajuste numérico; si quedó vacío o con un valor raro se usa el valor por defecto."""
+    try:
+        return int(get_setting(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def set_setting(key, value):
     ex("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
        (key, str(value)))
@@ -123,6 +131,60 @@ def set_setting(key, value):
 
 def audit(username, action, detail=""):
     ex("INSERT INTO audit(username, action, detail) VALUES (?,?,?)", (username, action, detail))
+
+
+def _shift(hhmm, minutes):
+    h, m = map(int, hhmm.split(":")[:2])
+    t = min(max(h * 60 + m + minutes, 0), 23 * 60 + 59)
+    return f"{t // 60:02d}:{t % 60:02d}"
+
+
+def default_windows(start, end):
+    """Entrada: 1 h 30 antes y después de la hora de inicio. Salida: desde la hora de salida hasta 3 h después."""
+    return _shift(start, -90), _shift(start, 90), _shift(end, 0), _shift(end, 180)
+
+
+def merge_device(c, keep, dup):
+    """Une el registro dup en keep (mismo equipo físico) con todo su historial. Si dup se conectó más
+    recientemente, keep se queda con su dirección y clave."""
+    d = c.execute("SELECT * FROM devices WHERE id=?", (dup,)).fetchone()
+    k = c.execute("SELECT * FROM devices WHERE id=?", (keep,)).fetchone()
+    if not d or not k:
+        return
+    c.execute("UPDATE OR IGNORE events SET device_id=? WHERE device_id=?", (keep, dup))
+    c.execute("DELETE FROM events WHERE device_id=?", (dup,))
+    c.execute("UPDATE OR IGNORE employee_sync SET device_id=? WHERE device_id=?", (keep, dup))
+    c.execute("DELETE FROM employee_sync WHERE device_id=?", (dup,))
+    c.execute("""UPDATE devices SET active=MAX(active, ?), serial=COALESCE(serial, ?), mac=COALESCE(mac, ?),
+                 model=COALESCE(model, ?), firmware=COALESCE(firmware, ?),
+                 last_event_time=NULLIF(MAX(COALESCE(last_event_time,''), ?),'') WHERE id=?""",
+              (d["active"], d["serial"], d["mac"], d["model"], d["firmware"], d["last_event_time"] or "", keep))
+    c.execute("DELETE FROM devices WHERE id=?", (dup,))
+    if (d["last_seen"] or "") > (k["last_seen"] or ""):
+        c.execute("""UPDATE devices SET host=?, port=?, https=?, username=?, password=?, online=?, last_seen=?,
+                     last_error=? WHERE id=?""", (d["host"], d["port"], d["https"], d["username"], d["password"],
+                                                 d["online"], d["last_seen"], d["last_error"], keep))
+
+
+def merge_same_serial(c):
+    """El mismo equipo (mismo número de serie) registrado con dos IP distintas se une en el más antiguo."""
+    dups = c.execute("""SELECT k.keep, d.id FROM devices d JOIN
+                        (SELECT serial, MIN(id) AS keep FROM devices WHERE COALESCE(serial,'')<>''
+                         GROUP BY serial HAVING COUNT(*)>1) k ON k.serial=d.serial WHERE d.id<>k.keep""").fetchall()
+    for keep, dup in dups:
+        merge_device(c, keep, dup)
+    return len(dups)
+
+
+def _merge_duplicate_devices(c):
+    """Un mismo equipo (IP + puerto, o mismo número de serie) registrado varias veces se une en el primero."""
+    c.execute("UPDATE devices SET host=lower(trim(host)) WHERE host<>lower(trim(host))")
+    dups = c.execute("""SELECT k.keep, d.id FROM devices d JOIN
+                        (SELECT host, port, MIN(id) AS keep FROM devices GROUP BY host, port HAVING COUNT(*)>1) k
+                        ON k.host=d.host AND k.port=d.port WHERE d.id<>k.keep""").fetchall()
+    for keep, dup in dups:
+        merge_device(c, keep, dup)
+    merge_same_serial(c)
 
 
 def init():
@@ -135,12 +197,23 @@ def init():
             # Fecha en que se registró el rostro: desde ahí cuenta la asistencia
             c.execute("ALTER TABLE employees ADD COLUMN face_at TEXT")
             c.execute("UPDATE employees SET face_at=substr(created_at,1,10) WHERE photo IS NOT NULL")
+        scols = {r[1] for r in c.execute("PRAGMA table_info(schedules)")}
+        if "in_from" not in scols:
+            # Ventanas: solo cuentan como entrada/salida las marcas dentro de estos rangos
+            for col in ("in_from", "in_to", "out_from", "out_to"):
+                c.execute(f"ALTER TABLE schedules ADD COLUMN {col} TEXT")
+            for sid, st, en in c.execute("SELECT id, start_time, end_time FROM schedules").fetchall():
+                c.execute("UPDATE schedules SET in_from=?, in_to=?, out_from=?, out_to=? WHERE id=?",
+                          default_windows(st, en) + (sid,))
+        _merge_duplicate_devices(c)
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_devices_host_port ON devices(host, port)")
         if not c.execute("SELECT 1 FROM users").fetchone():
             c.execute("INSERT INTO users(username, full_name, password_hash, role) VALUES (?,?,?,?)",
                       ("admin", "Administrador", hash_password(os.environ.get("ADMIN_PASSWORD") or "admin123"), "admin"))
         if not c.execute("SELECT 1 FROM schedules").fetchone():
-            c.execute("INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days) "
-                      "VALUES ('Oficina L-V','08:00','17:00',10,60,'1,2,3,4,5')")
+            c.execute("INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days,"
+                      "in_from,in_to,out_from,out_to) VALUES ('Oficina L-V','08:00','17:00',10,60,'1,2,3,4,5',"
+                      "'06:30','09:30','17:00','20:00')")
         c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('company','Paso Largo')")
         c.execute("UPDATE settings SET value='Paso Largo' WHERE key='company' AND value='Mi Empresa'")
         c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('poll_seconds','5')")

@@ -1,13 +1,17 @@
 """Simulador de terminal facial Hikvision (ISAPI) para probar el sistema sin el equipo real.
 
 Uso:  python simulador.py            -> escucha en http://127.0.0.1:8090  (usuario admin / clave 12345)
+      python simulador.py --ip 0.0.0.0 --puerto 8091   -> otra IP/puerto (para probar el cambio de IP)
 Genera marcaciones aleatorias de los usuarios registrados cada pocos segundos.
+También responde a la búsqueda SADP (UDP 37020) como un equipo Hikvision de verdad.
 """
+import argparse
 import hashlib
 import json
 import random
 import re
 import secrets
+import socket
 import threading
 import time
 from datetime import datetime, timedelta
@@ -138,6 +142,20 @@ async def face(request: Request):
     return {"statusCode": 1, "statusString": "OK"}
 
 
+@app.post("/ISAPI/Intelligent/FDLib/FDSearch")
+async def face_search(request: Request):
+    no = (await request.json()).get("FPID")
+    found = no in state["faces"]
+    return {"statusCode": 1, "numOfMatches": int(found),
+            "MatchList": [{"FPID": no, "faceURL": f"http://127.0.0.1:8090/face/{no}.jpg"}] if found else []}
+
+
+@app.get("/face/{no}.jpg")
+def face_picture(no: str):
+    img = state["faces"].get(no)
+    return Response(img, media_type="image/jpeg") if img else Response(status_code=404)
+
+
 @app.put("/ISAPI/Intelligent/FDLib/FDSearch/Delete")
 async def face_delete(request: Request):
     for x in (await request.json())["FPID"]:
@@ -180,7 +198,9 @@ async def alert_stream():
                 ev = state["events"][-1]
                 body = json.dumps({"eventType": "AccessControllerEvent", "dateTime": ev["time"],
                                    "AccessControllerEvent": {"majorEventType": 5, "subEventType": ev["minor"],
-                                                             "employeeNoString": ev["employeeNoString"]}})
+                                                             "employeeNoString": ev["employeeNoString"],
+                                                             "serialNo": ev["serialNo"], "name": ev["name"],
+                                                             "currentVerifyMode": ev["currentVerifyMode"]}})
             elif beat % 20 == 0:
                 body = json.dumps({"eventType": "heartBeat", "eventState": "active"})
             else:
@@ -197,6 +217,32 @@ def picture(serial: int):
     ev = next((e for e in state["events"] if e["serialNo"] == serial), None)
     img = state["faces"].get(ev["employeeNoString"]) if ev else None
     return Response(img, media_type="image/jpeg") if img else Response(status_code=404)
+
+
+def sadp_responder(ip, port):
+    """Contesta la consulta SADP de Hikvision con IP, serie y MAC de este equipo simulado."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("", 37020))
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                     socket.inet_aton("239.255.255.250") + socket.inet_aton("0.0.0.0"))
+    except OSError as e:
+        print(f"[simulador] SADP no disponible: {e}")
+        return
+    while True:
+        data, addr = s.recvfrom(65535)
+        m = re.search(rb"<Uuid>([^<]+)</Uuid>", data)
+        if b"<Probe>" not in data or not m:
+            continue
+        reply = ('<?xml version="1.0" encoding="UTF-8"?><ProbeMatch>'
+                 f"<Uuid>{m.group(1).decode()}</Uuid><Types>inquiry</Types><DeviceType>ACS</DeviceType>"
+                 "<DeviceDescription>DS-K1T341AMF (simulado)</DeviceDescription><DeviceSN>SIM0001</DeviceSN>"
+                 f"<CommandPort>8000</CommandPort><HttpPort>{port}</HttpPort><MAC>00-11-22-33-44-55</MAC>"
+                 f"<IPv4Address>{ip}</IPv4Address><IPv4SubnetMask>255.255.255.0</IPv4SubnetMask>"
+                 "<DHCP>true</DHCP><Activated>true</Activated></ProbeMatch>").encode()
+        s.sendto(reply, ("239.255.255.250", 37020))  # como los equipos reales: al grupo multicast
+        print(f"[simulador] respondí a SADP de {addr[0]} (IP {ip}:{port})")
 
 
 def generator():
@@ -228,6 +274,20 @@ def generator():
 
 
 if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--ip", default="127.0.0.1")
+    p.add_argument("--puerto", type=int, default=8090)
+    a = p.parse_args()
+    shown = a.ip
+    if a.ip == "0.0.0.0":
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("10.255.255.255", 1))
+            shown = s.getsockname()[0]
+        except OSError:
+            shown = "127.0.0.1"
+        s.close()
     threading.Thread(target=generator, daemon=True).start()
-    print(f"Simulador ISAPI en http://127.0.0.1:8090  (usuario {USER} / clave {PASSWORD})")
-    uvicorn.run(app, host="127.0.0.1", port=8090, log_level="warning")
+    threading.Thread(target=sadp_responder, args=(shown, a.puerto), daemon=True).start()
+    print(f"Simulador ISAPI en http://{shown}:{a.puerto}  (usuario {USER} / clave {PASSWORD})")
+    uvicorn.run(app, host=a.ip, port=a.puerto, log_level="warning")

@@ -5,7 +5,7 @@
 <title>{% block title %}Asistencia{% endblock %} · Paso Largo</title>
 <link href="/static/bootstrap.min.css" rel="stylesheet">
 <link href="/static/bootstrap-icons.min.css" rel="stylesheet">
-<link href="/static/tema.css?v=8" rel="stylesheet">
+<link href="/static/tema.css?v=9" rel="stylesheet">
 </head>
 <body>
 {% macro brand() %}
@@ -49,8 +49,36 @@
     {% block content %}{% endblock %}
   </main>
 </div>
+<div class="modal fade" id="photoModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-xl"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title" id="photoCaption"></h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body"><div class="row g-3 justify-content-center">
+    <div class="col"><figure class="photo-big mb-0"><img id="photoBig" alt=""><figcaption id="photoBigCap">Foto de la marcación</figcaption></figure></div>
+    <div class="col-md-4 d-none" id="photoRefCol"><figure class="photo-big mb-0"><img id="photoRef" alt=""><figcaption>Foto registrada</figcaption></figure></div>
+  </div></div></div></div></div>
 <script src="/static/bootstrap.bundle.min.js"></script>
 <script>
+// Cualquier elemento con data-photo abre la foto en grande (data-ref: foto registrada para comparar)
+document.addEventListener('click', ev => {
+  const el = ev.target.closest('[data-photo]'); if (!el) return;
+  ev.preventDefault();
+  const ref = el.dataset.ref, refCol = document.getElementById('photoRefCol');
+  document.getElementById('photoBig').src = el.dataset.photo;
+  document.getElementById('photoBigCap').textContent = el.dataset.label || 'Foto de la marcación';
+  document.getElementById('photoCaption').textContent = el.dataset.caption || '';
+  refCol.classList.toggle('d-none', !ref); if (ref) document.getElementById('photoRef').src = ref;
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('photoModal')).show();
+});
+// Tablas en vivo: lo marcado con data-live se actualiza solo cada 2 s (sin recargar la página)
+document.querySelectorAll('[data-live][id]').forEach(el => {
+  setInterval(async () => {
+    if (document.hidden || document.querySelector('.modal.show')) return;
+    try {
+      const html = await (await fetch(location.href, {cache: 'no-store'})).text();
+      const fresh = new DOMParser().parseFromString(html, 'text/html').getElementById(el.id);
+      if (fresh && fresh.innerHTML !== el.innerHTML) el.innerHTML = fresh.innerHTML;
+    } catch (e) {}
+  }, 2000);
+});
 function toggleNav(){ document.getElementById('sidebar').classList.toggle('open'); document.getElementById('backdrop').classList.toggle('show'); }
 </script>
 {% block scripts %}{% endblock %}

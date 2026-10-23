@@ -2,6 +2,7 @@ import io
 import logging
 import re
 import uuid
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -25,7 +26,7 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 app.add_middleware(SessionMiddleware, secret_key=SECRET, max_age=12 * 3600, same_site="lax")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals.update(local_offset=devices.local_offset, hm=attendance.hm, colors=attendance.STATUS_COLORS, minor_names=MINOR_NAMES,
-                             days=reports.DAYS)
+                             days=reports.DAYS, today=date.today)
 
 ROLES = {"admin": "Administrador", "supervisor": "Supervisor", "consulta": "Consulta"}
 LEAVE_KINDS = ["Vacaciones", "Permiso médico", "Permiso personal", "Licencia", "Comisión de servicio", "Otro"]
@@ -126,17 +127,45 @@ async def account_save(request: Request):
 
 
 # ------------------------------------------------------------------ dashboard
-def dashboard_data():
+TREND_KEYS = {"Puntual": "puntual", "Tarde": "tarde", "Ausente": "ausente"}
+
+
+def trend_data(days: int):
+    """Puntuales, tardanzas y faltas de los últimos `days` días (0 = últimas 24 h, por hora),
+    más los totales del periodo anterior para comparar."""
+    today = date.today()
+    if not days:
+        now = datetime.now().replace(minute=0, second=0, microsecond=0)
+        first = now - timedelta(hours=23)
+        by_hour = defaultdict(lambda: {"puntual": 0, "tarde": 0, "ausente": 0})
+        rows = attendance.compute(today - timedelta(days=2), today)
+        for r in rows:
+            if r["entry"] and r["status"] in ("Puntual", "Tarde"):
+                by_hour[r["entry"].replace(minute=0, second=0, microsecond=0)][TREND_KEYS[r["status"]]] += 1
+        series = [{"date": h.strftime("%H:00"), "dow": "", **by_hour[h]} for h in (first + timedelta(hours=i) for i in range(24))]
+        total = {k: sum(x[k] for x in series) for k in ("puntual", "tarde")}
+        prev = {k: sum(by_hour[first - timedelta(hours=i)][k] for i in range(1, 25)) for k in ("puntual", "tarde")}
+        # las faltas no tienen hora: se comparan las de hoy con las de ayer
+        total["ausente"] = sum(r["status"] == "Ausente" for r in rows if r["date"] == today)
+        prev["ausente"] = sum(r["status"] == "Ausente" for r in rows if r["date"] == today - timedelta(days=1))
+        return {"days": 0, "series": series, "total": total, "prev": prev}
+    start = today - timedelta(days=days - 1)
+    by_day = defaultdict(lambda: {"puntual": 0, "tarde": 0, "ausente": 0})
+    for r in attendance.compute(start - timedelta(days=days), today):
+        if r["status"] in TREND_KEYS:
+            by_day[r["date"]][TREND_KEYS[r["status"]]] += 1
+    series = [{"date": d.strftime("%d/%m"), "dow": "LMMJVSD"[d.weekday()], **by_day[d]}
+              for d in (start + timedelta(days=i) for i in range(days))]
+    total = {k: sum(x[k] for x in series) for k in ("puntual", "tarde", "ausente")}
+    prev = {k: sum(by_day[start - timedelta(days=i)][k] for i in range(1, days + 1)) for k in ("puntual", "tarde", "ausente")}
+    return {"days": days, "series": series, "total": total, "prev": prev}
+
+
+def dashboard_data(days: int = 7):
     today = date.today()
     rows = attendance.compute(today, today)
     count = lambda st: sum(1 for r in rows if r["status"] == st)
-    week = []
-    for i in range(6, -1, -1):
-        d = today - timedelta(days=i)
-        rs = attendance.compute(d, d)
-        week.append({"date": d.strftime("%d/%m"), "puntual": sum(r["status"] == "Puntual" for r in rs),
-                     "tarde": sum(r["status"] == "Tarde" for r in rs), "ausente": sum(r["status"] == "Ausente" for r in rs)})
-    last = db.q("""SELECT ev.*, e.name AS emp_name, d.name AS device FROM events ev
+    last = db.q("""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device FROM events ev
                    LEFT JOIN employees e ON e.employee_no=ev.employee_no LEFT JOIN devices d ON d.id=ev.device_id
                    ORDER BY ev.event_time DESC, ev.id DESC LIMIT 15""")
     for ev in last:
@@ -149,7 +178,7 @@ def dashboard_data():
             "late_list": [{"name": r["name"], "entry": r["entry"].strftime("%H:%M"), "late": r["late_min"]}
                           for r in rows if r["status"] == "Tarde"],
             "absent_list": [r["name"] for r in rows if r["status"] in ("Ausente", "Pendiente")],
-            "week": week, "events": last, "devices": devs, "now": datetime.now().strftime("%H:%M:%S")}
+            "trend": trend_data(days), "events": last, "devices": devs, "now": datetime.now().strftime("%H:%M:%S")}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -158,9 +187,9 @@ def dashboard(request: Request):
 
 
 @app.get("/api/dashboard")
-def api_dashboard(request: Request):
+def api_dashboard(request: Request, dias: int = 7):
     user(request)
-    return JSONResponse(dashboard_data())
+    return JSONResponse(dashboard_data(dias if dias in (0, 7, 30) else 7))
 
 
 # ------------------------------------------------------------------ empleados
@@ -238,8 +267,13 @@ async def employee_save(request: Request):
     vals = [no, f["name"], f.get("document"), f.get("department_id") or None, f.get("position"), f.get("email"),
             f.get("phone"), f.get("gender") or "unknown", f.get("schedule_id") or None, f.get("hire_date") or None,
             1 if f.get("active") else 0]
+    renamed = None
     if eid:
         old = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
+        if old["employee_no"] != no:
+            renamed = old
+            # Sus marcas anteriores pasan al N° nuevo, para que el historial siga junto
+            db.ex("UPDATE events SET employee_no=? WHERE employee_no=?", (no, old["employee_no"]))
         db.ex("""UPDATE employees SET employee_no=?, name=?, document=?, department_id=?, position=?, email=?,
                  phone=?, gender=?, schedule_id=?, hire_date=?, active=? WHERE id=?""", vals + [eid])
         if photo_name:
@@ -253,6 +287,14 @@ async def employee_save(request: Request):
                     vals + [photo_name, date.today().isoformat() if photo_name else None])
     db.audit(u["username"], "guardar empleado", f"{no} {f['name']}")
     emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
+    if renamed:
+        # Se borra del equipo el usuario con el N° viejo; si no, el equipo lo seguiría reconociendo
+        # y volvería a aparecer aquí como otro empleado
+        for name, ok, m in await run_in_threadpool(devices.remove_employee, renamed):
+            if not ok:
+                flash(request, f"{name}: no se pudo borrar el N° viejo {renamed['employee_no']} del equipo ({m}). "
+                               "Bórralo a mano en el equipo.", "warning")
+        db.audit(u["username"], "cambio de N° de empleado", f"{renamed['employee_no']} -> {no}")
     if emp["active"]:
         res = await run_in_threadpool(devices.push_employee, emp)
     else:
@@ -306,6 +348,9 @@ async def employees_import_device(request: Request):
     u = user(request, "admin")
     f = await form(request)
     dev = db.q1("SELECT * FROM devices WHERE id=?", (f.get("device_id"),))
+    if not dev:
+        flash(request, "Elige un equipo.", "danger")
+        return back("/empleados")
     try:
         users = await run_in_threadpool(devices.client(dev).search_users)
     except ISAPIError as e:
@@ -335,6 +380,9 @@ async def employees_import_excel(request: Request):
         flash(request, "No se pudo leer el archivo. Usa un .xlsx.", "danger")
         return back("/empleados")
     rows = list(wb.active.iter_rows(values_only=True))
+    if not rows:
+        flash(request, "El Excel está vacío.", "danger")
+        return back("/empleados")
     head = [str(h or "").strip().lower() for h in rows[0]]
     col = lambda *names: next((head.index(n) for n in names if n in head), None)
     c_no, c_name = col("numero", "número", "n°", "codigo", "código", "employee_no"), col("nombre", "name")
@@ -376,6 +424,47 @@ def photo(request: Request, name: str):
     return FileResponse(p) if p.exists() else Response(status_code=404)
 
 
+def _face_from_devices(emp):
+    """Trae la foto de rostro registrada en el equipo; si no hay, la última captura de una marcación."""
+    devs = db.q("SELECT * FROM devices WHERE active=1")
+    for dev in devs:
+        try:
+            c = devices.client(dev)
+            url = c.face_url(emp["employee_no"])
+            if url:
+                return c.fetch_picture(url), True
+        except ISAPIError:
+            pass
+    ev = db.q1("""SELECT ev.picture_url, d.* FROM events ev JOIN devices d ON d.id=ev.device_id
+                  WHERE ev.employee_no=? AND ev.picture_url IS NOT NULL AND ev.valid=1
+                  ORDER BY ev.event_time DESC LIMIT 1""", (emp["employee_no"],))
+    if ev:
+        try:
+            return devices.client(ev).fetch_picture(ev["picture_url"]), False
+        except ISAPIError:
+            pass
+    return None, False
+
+
+@app.get("/empleados/{eid}/rostro")
+async def employee_face(request: Request, eid: int):
+    """Foto del empleado: la del sistema o, si no tiene, la que está en el equipo (se guarda para la próxima)."""
+    user(request)
+    emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
+    if not emp:
+        return Response(status_code=404)
+    if emp["photo"] and (db.PHOTOS_DIR / emp["photo"]).exists():
+        return FileResponse(db.PHOTOS_DIR / emp["photo"])
+    data, enrolled = await run_in_threadpool(_face_from_devices, emp)
+    if not data:
+        return Response(status_code=404)
+    if enrolled:
+        name = f"{emp['employee_no']}_{uuid.uuid4().hex[:8]}.jpg"
+        (db.PHOTOS_DIR / name).write_bytes(data)
+        db.ex("UPDATE employees SET photo=? WHERE id=? AND photo IS NULL", (name, eid))
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
 # ------------------------------------------------------------------ departamentos / horarios / feriados
 @app.get("/configuracion", response_class=HTMLResponse)
 def config(request: Request):
@@ -397,12 +486,26 @@ async def config_save(request: Request, what: str):
         db.ex("DELETE FROM departments WHERE id=?", (f["id"],))
     elif what == "horario":
         days = ",".join(sorted(v for k, v in (await request.form()).multi_items() if k == "days"))
-        vals = (f["name"], f["start_time"], f["end_time"], int(f.get("tolerance_min") or 0), int(f.get("lunch_min") or 0), days)
+        win = tuple(f.get(k) or None for k in ("in_from", "in_to", "out_from", "out_to"))
+        if any(win) and not all(win):
+            flash(request, "Completa las cuatro horas de las ventanas, o déjalas todas vacías para no usar ventanas.", "danger")
+            return back("/configuracion")
+        if all(win) and (win[0] > win[1] or win[2] > win[3]):
+            flash(request, "En cada ventana la hora «desde» debe ser anterior a la hora «hasta».", "danger")
+            return back("/configuracion")
+        old = db.q1("SELECT * FROM schedules WHERE id=?", (f.get("id") or 0,))
+        before = (old["start_time"], old["end_time"]) if old else ("08:00", "17:00")
+        if all(win) and win == db.default_windows(*before) and before != (f["start_time"], f["end_time"]):
+            # Las ventanas estaban en su valor automático: se mueven con las nuevas horas del horario
+            win = db.default_windows(f["start_time"], f["end_time"])
+        vals = (f["name"], f["start_time"], f["end_time"], int(f.get("tolerance_min") or 0), int(f.get("lunch_min") or 0),
+                days) + win
         if f.get("id"):
-            db.ex("UPDATE schedules SET name=?, start_time=?, end_time=?, tolerance_min=?, lunch_min=?, days=? WHERE id=?",
-                  vals + (f["id"],))
+            db.ex("""UPDATE schedules SET name=?, start_time=?, end_time=?, tolerance_min=?, lunch_min=?, days=?,
+                     in_from=?, in_to=?, out_from=?, out_to=? WHERE id=?""", vals + (f["id"],))
         else:
-            db.ex("INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days) VALUES (?,?,?,?,?,?)", vals)
+            db.ex("""INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days,in_from,in_to,out_from,out_to)
+                     VALUES (?,?,?,?,?,?,?,?,?,?)""", vals)
     elif what == "horario-eliminar":
         db.ex("UPDATE employees SET schedule_id=NULL WHERE schedule_id=?", (f["id"],))
         db.ex("DELETE FROM schedules WHERE id=?", (f["id"],))
@@ -411,6 +514,12 @@ async def config_save(request: Request, what: str):
     elif what == "feriado-eliminar":
         db.ex("DELETE FROM holidays WHERE id=?", (f["id"],))
     elif what == "general" and u["role"] == "admin":
+        limits = {"poll_seconds": (2, "La revisión de respaldo debe ser un número de 2 segundos o más."),
+                  "min_gap_minutes": (0, "La separación mínima debe ser un número de 0 minutos o más.")}
+        for k, (low, msg) in limits.items():
+            if k in f and not (f[k].isdigit() and int(f[k]) >= low):
+                flash(request, msg, "danger")
+                return back("/configuracion")
         for k in ("company", "poll_seconds", "min_gap_minutes"):
             if k in f:
                 db.set_setting(k, f[k])
@@ -467,6 +576,9 @@ async def leave_save(request: Request):
     if f.get("delete"):
         db.ex("DELETE FROM leaves WHERE id=?", (f["delete"],))
     elif f.get("employee_id") and f.get("date_from"):
+        if (f.get("date_to") or f["date_from"]) < f["date_from"]:
+            flash(request, "La fecha «hasta» no puede ser anterior a «desde».", "danger")
+            return back("/permisos")
         db.ex("INSERT INTO leaves(employee_id,date_from,date_to,kind,notes,created_by) VALUES (?,?,?,?,?,?)",
               (f["employee_id"], f["date_from"], f.get("date_to") or f["date_from"], f.get("kind"), f.get("notes"),
                u["username"]))
@@ -515,12 +627,30 @@ def events(request: Request, desde: str = "", hasta: str = "", emp: str = "", de
         args.append(dev)
     if not todos:
         where.append("ev.employee_no IS NOT NULL")
-    rows = db.q(f"""SELECT ev.*, e.name AS emp_name, d.name AS device FROM events ev
+    rows = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device,
+                    s.in_from, s.in_to, s.out_from, s.out_to FROM events ev
                     LEFT JOIN employees e ON e.employee_no=ev.employee_no LEFT JOIN devices d ON d.id=ev.device_id
+                    LEFT JOIN schedules s ON s.id=e.schedule_id
                     WHERE {' AND '.join(where)} ORDER BY ev.event_time DESC LIMIT 1000""", args)
+    roles = attendance.mark_roles(d1, d2)
+    for ev in rows:
+        ev["counts_as"] = (roles.get((ev["employee_no"], datetime.fromisoformat(ev["event_time"])), "No cuenta")
+                           if ev["valid"] else "")
     return render(request, "events.html", u, rows=rows, desde=d1, hasta=d2, emp=emp, dev=dev, todos=todos,
                   emps=db.q("SELECT name, employee_no FROM employees ORDER BY name"),
                   devs=db.q("SELECT id, name FROM devices ORDER BY name"))
+
+
+@app.post("/eventos/{evid}/eliminar")
+async def event_delete(request: Request, evid: int):
+    """Solo se pueden borrar las marcas manuales; las del equipo son el registro original."""
+    u = user(request, "admin", "supervisor")
+    ev = db.q1("SELECT * FROM events WHERE id=? AND source='manual'", (evid,))
+    if ev:
+        db.ex("DELETE FROM events WHERE id=?", (evid,))
+        db.audit(u["username"], "borrar marca manual", f"{ev['employee_no']} {ev['event_time']} {ev['attendance_status']}")
+        flash(request, "Marca manual borrada.")
+    return back(request.headers.get("referer") or "/eventos")
 
 
 @app.get("/eventos/{evid}/foto")
@@ -534,7 +664,8 @@ async def event_photo(request: Request, evid: int):
         data = await run_in_threadpool(devices.client(dev).fetch_picture, ev["picture_url"])
     except ISAPIError:
         return Response(status_code=502)
-    return Response(data, media_type="image/jpeg")
+    # La foto de una marcación no cambia: el navegador la guarda y no se vuelve a pedir al equipo
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=604800"})
 
 
 # ------------------------------------------------------------------ reportes
@@ -580,13 +711,42 @@ def device_list(request: Request):
     return render(request, "devices.html", u, devs=devs)
 
 
+@app.post("/dispositivos/buscar")
+async def device_search(request: Request):
+    """Busca biométricos en la red; a los ya registrados que cambiaron de IP se les corrige sola."""
+    u = user(request, "admin")
+    found, nets = await run_in_threadpool(devices.search_network)
+    for f in found:
+        if f["status"] == "movido":
+            flash(request, f"«{f['dev_name']}» estaba en otra IP: {f['note']}. Ya se reconectó.")
+    if not found:
+        flash(request, f"No se encontró ningún biométrico en la red ({', '.join(nets) or 'sin red'}). "
+                       "Revisa que esté encendido y conectado al mismo router/switch que esta PC.", "warning")
+    db.audit(u["username"], "buscar equipos en la red", ", ".join(f["ip"] for f in found))
+    poller.wake.set()
+    devs = db.q("""SELECT d.*, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
+                   FROM devices d ORDER BY d.name""")
+    return render(request, "devices.html", u, devs=devs, found=found, nets=nets, searched=True)
+
+
 @app.post("/dispositivos/guardar")
 async def device_save(request: Request):
     u = user(request, "admin")
     f = await form(request)
-    vals = [f["name"], f["host"], int(f.get("port") or 80), 1 if f.get("https") else 0, f["username"],
+    host, port = f["host"].strip().lower(), int(f.get("port") or 80)
+    vals = [f["name"], host, port, 1 if f.get("https") else 0, f["username"],
             devices.local_offset(), int(f.get("door_no") or 1), f.get("direction") or "ambos",
             1 if f.get("active") else 0]
+    # Un equipo se identifica por IP + puerto: nunca se registra dos veces
+    same = db.q1("SELECT id, name FROM devices WHERE host=? AND port=? AND id<>?", (host, port, f.get("id") or 0))
+    if same and f.get("id"):
+        flash(request, f"La dirección {host}:{port} ya es del equipo «{same['name']}».", "danger")
+        return back("/dispositivos")
+    if same:
+        f["id"] = str(same["id"])
+        vals[-1] = 1
+        flash(request, f"El equipo {host}:{port} ya estaba registrado como «{same['name']}»: se actualizaron "
+                       "sus datos en lugar de crear otro.", "info")
     if f.get("id"):
         db.ex("""UPDATE devices SET name=?, host=?, port=?, https=?, username=?, tz_offset=?, door_no=?, direction=?,
                  active=? WHERE id=?""", vals + [f["id"]])
@@ -612,6 +772,9 @@ async def device_save(request: Request):
 async def device_action(request: Request, did: int, action: str):
     u = user(request, "admin", "supervisor") if action.startswith("puerta") else user(request, "admin")
     dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
+    if not dev:
+        flash(request, "Ese equipo ya no existe.", "danger")
+        return back("/dispositivos")
     c = devices.client(dev)
     try:
         if action == "probar":
@@ -620,6 +783,16 @@ async def device_action(request: Request, did: int, action: str):
             t = await run_in_threadpool(c.get_time)
             flash(request, f"En línea: {info.get('model')} (serie {info.get('serialNumber')}), {n} usuarios, "
                            f"hora del equipo {t.get('localTime', '?')}.")
+        elif action == "ip":
+            f = await form(request)
+            host, _, port = (f.get("host") or "").strip().partition(":")
+            if not re.fullmatch(r"[\w.-]+", host):
+                flash(request, "Escribe la IP del equipo, por ejemplo 192.168.1.200.", "danger")
+                return back("/dispositivos")
+            info = await run_in_threadpool(devices.connect_at, dev, host, port if port.isdigit() else None)
+            poller.wake.set()
+            flash(request, f"Conectado: {dev['name']} ahora está en {host.lower()} "
+                           f"({info.get('model')}, serie {info.get('serialNumber')}).")
         elif action.startswith("puerta-"):
             cmd = {"puerta-abrir": "open", "puerta-cerrar": "close", "puerta-siempre-abierta": "alwaysOpen",
                    "puerta-normal": "close", "puerta-siempre-cerrada": "alwaysClose"}[action]
@@ -638,6 +811,10 @@ async def device_action(request: Request, did: int, action: str):
         elif action == "eliminar":
             db.ex("UPDATE devices SET active=0 WHERE id=?", (did,))
             flash(request, "Dispositivo desactivado (su historial se conserva).")
+        elif action == "activar":
+            db.ex("UPDATE devices SET active=1 WHERE id=?", (did,))
+            poller.wake.set()
+            flash(request, f"{dev['name']} vuelve a estar activo.")
         db.audit(u["username"], f"dispositivo {action}", dev["name"])
     except ISAPIError as e:
         flash(request, f"{dev['name']}: {e}", "danger")

@@ -13,25 +13,37 @@
 </div>
 <div class="row g-3">
   <div class="col-xl-8">
-    <div class="card card-future mb-3">
+    <div class="card card-future mb-3" id="trend">
       <div class="fx-head">
-        <div><div class="fx-kicker">TENDENCIA · 7 DÍAS</div><div class="fx-title">Asistencia semanal</div></div>
-        <div class="fx-kpis">
-          <div><span class="fx-k" id="fx-rate">—</span><span class="fx-l">puntualidad</span></div>
-          <div><span class="fx-k" id="fx-pres">—</span><span class="fx-l">asistencias</span></div>
-          <div><span class="fx-k fx-warn" id="fx-late">—</span><span class="fx-l">tardanzas</span></div>
-          <div><span class="fx-k fx-bad" id="fx-abs">—</span><span class="fx-l">faltas</span></div>
+        <div><div class="fx-kicker"><span class="fx-live"></span>TENDENCIA · <span id="fx-span">7 DÍAS</span></div>
+          <div class="fx-title" id="fx-title">Asistencia semanal</div></div>
+        <div class="fx-seg" role="tablist" aria-label="Periodo">
+          <span class="fx-glider"></span>
+          <button type="button" data-days="0">24 h</button><button type="button" data-days="7">1 semana</button><button type="button" data-days="30">Mensual</button>
         </div>
       </div>
+      <div class="fx-kpis">
+        <div class="fx-tile fx-gauge"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" class="fx-ring-bg"/><circle cx="24" cy="24" r="20" class="fx-ring" id="fx-ring"/></svg>
+          <div><span class="fx-k" id="fx-rate">—</span><span class="fx-l">puntualidad</span><span class="fx-d" id="fx-d-rate"></span></div></div>
+        <div class="fx-tile"><span class="fx-k" id="fx-pres">—</span><span class="fx-l">asistencias</span><span class="fx-d" id="fx-d-pres"></span></div>
+        <div class="fx-tile"><span class="fx-k fx-warn" id="fx-late">—</span><span class="fx-l">tardanzas</span><span class="fx-d" id="fx-d-late"></span></div>
+        <div class="fx-tile"><span class="fx-k fx-bad" id="fx-abs">—</span><span class="fx-l" id="fx-l-abs">faltas</span><span class="fx-d" id="fx-d-abs"></span></div>
+      </div>
       <div class="fx-body"><canvas id="week" height="120"></canvas></div>
-      <div class="fx-legend"><span><i style="background:#f1f7d2"></i>Puntual</span><span><i style="background:#5aa9e6"></i>Tarde</span><span><i style="background:#f26b55"></i>Ausente</span></div>
+      <div class="fx-foot">
+        <div class="fx-legend"><span><i style="background:#f1f7d2"></i>Puntual</span><span><i style="background:#5aa9e6"></i>Tarde</span><span id="fx-leg-abs"><i style="background:#f26b55"></i>Ausente</span></div>
+        <div class="fx-mix" title="Composición del periodo"><b id="fx-mix-p"></b><b id="fx-mix-t"></b><b id="fx-mix-a"></b></div>
+      </div>
     </div>
     <div class="card"><div class="card-header">Marcaciones en vivo <a href="/eventos" class="small fw-normal">Ver todas</a></div>
       <div class="table-responsive table-wrap"><table class="table table-hover align-middle">
-        <thead><tr><th>Hora</th><th>Empleado</th><th>Evento</th><th>Equipo</th></tr></thead>
+        <thead><tr><th>Hora</th><th>Empleado</th><th>Evento</th><th>Equipo</th><th>Foto</th></tr></thead>
         <tbody id="events"></tbody></table></div></div>
   </div>
   <div class="col-xl-4">
+    <div class="card mb-3"><div class="card-header">Última marcación</div><div class="card-body">
+      <div class="last-shot" id="lastShot"><div class="text-center"><i class="bi bi-person-bounding-box fs-1 d-block"></i><span class="small">Aún no hay fotos</span></div></div>
+      <div class="mt-2 small" id="lastShotCap"></div></div></div>
     <div class="card mb-3"><div class="card-header">Dispositivos</div>
       <ul class="list-group list-group-flush" id="devices">
       {% for dv in d.devices %}<li class="list-group-item d-flex justify-content-between align-items-center gap-2">
@@ -63,34 +75,96 @@ const scan = {id:'scan', beforeDraw(c){ const {ctx, chartArea:a} = c; if (!a) re
   for (let x = a.left; x < a.right; x += 18) { ctx.beginPath(); ctx.moveTo(x, a.top); ctx.lineTo(x, a.bottom); ctx.stroke(); } ctx.restore(); }};
 const chart = new Chart(cv, {data:{labels:[], datasets:[
   {type:'line', label:'Puntual', data:[], borderColor:'#f1f7d2', backgroundColor:grad('rgba(241,247,210,.38)','rgba(241,247,210,0)'),
-   fill:'origin', tension:.42, borderWidth:2.5, pointRadius:4, pointHoverRadius:7, pointBackgroundColor:'#7a8d44', pointBorderColor:'#f1f7d2', pointBorderWidth:2},
+   fill:'origin', spanGaps:true, tension:.42, borderWidth:2.5, pointRadius:4, pointHoverRadius:7, pointBackgroundColor:'#7a8d44', pointBorderColor:'#f1f7d2', pointBorderWidth:2},
   {type:'bar', label:'Tarde', data:[], borderColor:'#5aa9e6', backgroundColor:grad('rgba(90,169,230,1)','rgba(90,169,230,.35)'), borderRadius:6, barPercentage:.5, categoryPercentage:.45, borderWidth:0},
   {type:'bar', label:'Ausente', data:[], borderColor:'#f26b55', backgroundColor:grad('rgba(242,107,85,1)','rgba(242,107,85,.35)'), borderRadius:6, barPercentage:.5, categoryPercentage:.45, borderWidth:0}]},
   plugins:[scan],
   options:{animation:{duration:900, easing:'easeOutQuart'}, interaction:{mode:'index', intersect:false},
     plugins:{legend:{display:false}, tooltip:{backgroundColor:'rgba(74,90,40,.96)', borderColor:'rgba(241,247,210,.45)', borderWidth:1,
       titleColor:'#f1f7d2', bodyColor:'#e9edd8', padding:10, cornerRadius:8, displayColors:true, boxPadding:4}},
-    scales:{x:{grid:{display:false}, border:{color:'rgba(241,247,210,.25)'}, ticks:{color:'#ffffff', font:{size:11, weight:'500'}}},
+    scales:{x:{grid:{display:false}, border:{color:'rgba(241,247,210,.25)'}, ticks:{color:'#ffffff', font:{size:11, weight:'500'}, maxRotation:0, autoSkipPadding:10}},
             y:{beginAtZero:true, ticks:{precision:0, color:'#f1f4e4', font:{size:10}}, border:{display:false},
                grid:{color:'rgba(241,247,210,.09)', drawTicks:false}}}}});
-function paint(d){
+let lastShot = null;
+function photoAttrs(ev){
+  const cap = `${ev.emp_name || ev.name || 'Desconocido'} · ${ev.event_time.slice(8,10)}/${ev.event_time.slice(5,7)} ${ev.event_time.slice(11,19)} · ${ev.device||''}`;
+  return `data-photo="/eventos/${ev.id}/foto" data-caption="${esc(cap)}"` + (ev.emp_id ? ` data-ref="/empleados/${ev.emp_id}/rostro"` : '');
+}
+function paint(d, animate){
   for (const k of ['total','presentes','tarde','ausente','pendiente','justificado']) document.getElementById('k-'+k).textContent = d[k];
   document.getElementById('now').textContent = d.now;
   document.getElementById('events').innerHTML = d.events.map(ev => `<tr><td class="mono">${ev.event_time.slice(11,19)} <span class="text-secondary small">${ev.event_time.slice(8,10)}/${ev.event_time.slice(5,7)}</span></td>
       <td>${esc(ev.emp_name || ev.name || '—')} <span class="text-secondary small">${esc(ev.employee_no||'')}</span></td>
-      <td><span class="badge text-bg-${ev.valid?'success':'secondary'}">${esc(ev.minor_name)}</span></td><td>${esc(ev.device||'Manual')}</td></tr>`).join('') || empty('clock-history','Sin marcaciones todavía', 4);
+      <td><span class="badge text-bg-${ev.valid?'success':'secondary'}">${esc(ev.minor_name)}</span></td><td>${esc(ev.device||'Manual')}</td>
+      <td>${ev.picture_url ? `<button type="button" class="btn btn-sm btn-outline-secondary btn-icon" title="Ver foto en grande" ${photoAttrs(ev)}><i class="bi bi-image"></i></button>` : '—'}</td></tr>`).join('') || empty('clock-history','Sin marcaciones todavía', 5);
+  const shot = d.events.find(ev => ev.picture_url && ev.employee_no);
+  if (shot && shot.id !== lastShot) {
+    lastShot = shot.id;
+    document.getElementById('lastShot').innerHTML = `<img src="/eventos/${shot.id}/foto" alt="" ${photoAttrs(shot)}>`;
+    document.getElementById('lastShotCap').innerHTML = `<span class="fw-medium">${esc(shot.emp_name || shot.name || '—')}</span> <span class="mono text-secondary">${shot.event_time.slice(11,19)} · ${esc(shot.device||'')}</span>`;
+  }
   document.getElementById('late').innerHTML = d.late_list.map(l => `<li class="list-group-item d-flex justify-content-between"><span>${esc(l.name)}</span><span class="mono">${l.entry} <span class="badge text-bg-warning ms-1">+${l.late} min</span></span></li>`).join('') || empty('emoji-smile','Nadie llegó tarde');
   document.getElementById('absent').innerHTML = d.absent_list.map(n => `<li class="list-group-item">${esc(n)}</li>`).join('') || empty('check2-circle','Todos marcaron');
-  chart.data.labels = d.week.map(w=>w.date);
-  chart.data.datasets[0].data = d.week.map(w=>w.puntual); chart.data.datasets[1].data = d.week.map(w=>w.tarde); chart.data.datasets[2].data = d.week.map(w=>w.ausente);
-  chart.update('none');
-  const sum = k => d.week.reduce((a, w) => a + w[k], 0), p = sum('puntual'), t = sum('tarde'), ab = sum('ausente');
-  document.getElementById('fx-rate').textContent = (p + t) ? Math.round(100 * p / (p + t)) + '%' : '—';
-  document.getElementById('fx-pres').textContent = p + t;
-  document.getElementById('fx-late').textContent = t;
-  document.getElementById('fx-abs').textContent = ab;
+  paintTrend(d.trend, animate);
 }
+
+// ---- Tendencia: 24 h / 1 semana / Mensual
+const RANGES = {0: ['24 HORAS', 'Asistencia de hoy', 'vs. 24 h antes'], 7: ['7 DÍAS', 'Asistencia semanal', 'vs. semana anterior'],
+                30: ['30 DÍAS', 'Asistencia mensual', 'vs. mes anterior']};
+let range = 7;
+try { const r = +localStorage.getItem('trendDays'); if (r in RANGES) range = r; } catch (e) {}
+const $ = id => document.getElementById(id);
+const narrow = () => window.innerWidth < 576;
+const rate = (p, t) => (p + t) ? 100 * p / (p + t) : null;
+function delta(id, now, before, goodUp, pts){
+  const el = $(id);
+  if (pts ? (now == null || before == null) : !before) { el.textContent = ''; el.className = 'fx-d'; return; }
+  const v = pts ? Math.round(now - before) : Math.round(100 * (now - before) / before);
+  el.className = 'fx-d ' + (v === 0 ? '' : ((v > 0) === goodUp ? 'up' : 'down'));
+  el.textContent = `${v > 0 ? '▲' : v < 0 ? '▼' : '='} ${Math.abs(v)}${pts ? ' pts' : '%'}`;
+  el.title = RANGES[range][2];
+}
+function paintTrend(tr, animate){
+  if (tr.days !== range) return;  // respuesta de un periodo anterior al cambio
+  const s = tr.series, month = tr.days === 30, hours = tr.days === 0;
+  chart.data.labels = s.map(w => month || hours ? w.date : [w.date, w.dow]);
+  // días sin nadie (domingos, feriados) no bajan la línea a cero: se saltan
+  chart.data.datasets[0].data = s.map(w => !hours && !(w.puntual + w.tarde + w.ausente) ? null : w.puntual);
+  chart.data.datasets[1].data = s.map(w => w.tarde);
+  chart.data.datasets[2].data = s.map(w => w.ausente); chart.data.datasets[2].hidden = hours;
+  chart.data.datasets[0].pointRadius = month || hours ? 2 : 4;
+  for (const i of [1, 2]) { chart.data.datasets[i].barPercentage = month || hours ? .8 : .5; chart.data.datasets[i].borderRadius = month || hours ? 3 : 6; }
+  chart.options.scales.x.ticks.maxTicksLimit = month ? (narrow() ? 6 : 10) : hours ? (narrow() ? 6 : 12) : 7;
+  chart.update(animate ? undefined : 'none');
+  const {puntual: p, tarde: t, ausente: ab} = tr.total, pv = tr.prev, r = rate(p, t);
+  $('fx-rate').textContent = r == null ? '—' : Math.round(r) + '%';
+  $('fx-ring').style.strokeDashoffset = 125.66 * (1 - (r ?? 0) / 100);
+  $('fx-pres').textContent = p + t; $('fx-late').textContent = t; $('fx-abs').textContent = ab;
+  $('fx-l-abs').textContent = hours ? 'faltas hoy' : 'faltas';
+  $('fx-leg-abs').style.display = hours ? 'none' : '';
+  delta('fx-d-rate', r, rate(pv.puntual, pv.tarde), true, true);
+  delta('fx-d-pres', p + t, pv.puntual + pv.tarde, true);
+  delta('fx-d-late', t, pv.tarde, false);
+  delta('fx-d-abs', ab, pv.ausente, false);
+  const all = p + t + ab || 1;
+  $('fx-mix-p').style.flexGrow = p / all; $('fx-mix-t').style.flexGrow = t / all; $('fx-mix-a').style.flexGrow = ab / all;
+}
+const seg = document.querySelector('.fx-seg'), btns = [...seg.querySelectorAll('button')];
+function markRange(){
+  btns.forEach((b, i) => { const on = +b.dataset.days === range; b.classList.toggle('active', on); b.setAttribute('aria-selected', on);
+                           if (on) seg.style.setProperty('--i', i); });
+  $('fx-span').textContent = RANGES[range][0]; $('fx-title').textContent = RANGES[range][1];
+}
+async function refresh(animate){
+  try { const d = await (await fetch('/api/dashboard?dias=' + range)).json(); paint(d, animate); } catch (e) {}
+}
+btns.forEach(b => b.addEventListener('click', () => {
+  range = +b.dataset.days; try { localStorage.setItem('trendDays', range); } catch (e) {}
+  markRange(); $('trend').classList.remove('fx-swap'); void $('trend').offsetWidth; $('trend').classList.add('fx-swap'); refresh(true);
+}));
+markRange();
 paint({{ d | tojson }}); chart.update();
-setInterval(async () => { try { paint(await (await fetch('/api/dashboard')).json()); } catch (e) {} }, 2000);
+if (range !== 7) refresh(true);
+setInterval(() => refresh(false), 2000);
 </script>
 {% endblock %}

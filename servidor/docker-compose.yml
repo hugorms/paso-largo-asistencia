@@ -1,0 +1,16 @@
+# Paso Largo en el servidor Ubuntu de la red local (restaurante).
+# Uso (desde la carpeta del proyecto):  sudo docker compose -f servidor/docker-compose.yml up -d --build
+services:
+  web:
+    build: ..
+    container_name: paso-largo
+    # Arranca solo al prender el servidor y se reinicia si se cae
+    restart: unless-stopped
+    # Red del servidor: hace falta para buscar el biométrico (SADP por multicast + barrido de la subred)
+    network_mode: host
+    environment:
+      - TZ=America/Caracas
+      - ASISTENCIA_DATA=/data
+    volumes:
+      # Base de datos, fotos y clave de sesión quedan en ~/paso-largo/datos
+      - ../datos:/data
