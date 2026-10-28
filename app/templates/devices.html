@@ -1,5 +1,6 @@
 {% extends "base.html" %}{% block title %}Dispositivos{% endblock %}
 {% block content %}
+<datalist id="sedes-list">{% for s in sedes or [] %}<option value="{{ s }}">{% endfor %}</datalist>
 <div class="page-head"><div><h1>Dispositivos</h1><div class="sub">Terminales de reconocimiento facial conectados por ISAPI</div></div>
 {% if u.role == 'admin' %}<div class="page-actions">
   <form method="post" action="/dispositivos/buscar" onsubmit="this.querySelector('button').disabled=true;this.querySelector('span').textContent='Buscando… (unos 10 s)'"><button class="btn btn-primary" title="Busca los biométricos conectados a la red de esta PC y reconecta los que cambiaron de IP"><i class="bi bi-search"></i> <span>Buscar biométrico</span></button></form>
@@ -62,6 +63,7 @@
   </div>
   <div class="card-body">
   <dl class="row small mb-3 gy-1">
+    <dt class="col-5 text-secondary fw-normal">Local</dt><dd class="col-7 mb-0">{{ dv.sede or '— (ponlo en Editar)' }}</dd>
     <dt class="col-5 text-secondary fw-normal">Dirección</dt><dd class="col-7 mb-0 mono">{{ dv.host }}:{{ dv.port }}</dd>
     <dt class="col-5 text-secondary fw-normal">N° de serie</dt><dd class="col-7 mb-0 mono small">{{ dv.serial or '—' }}</dd>
     <dt class="col-5 text-secondary fw-normal">Modelo</dt><dd class="col-7 mb-0">{{ dv.model or '—' }}</dd>

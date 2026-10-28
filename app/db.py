@@ -205,6 +205,10 @@ def init():
             for sid, st, en in c.execute("SELECT id, start_time, end_time FROM schedules").fetchall():
                 c.execute("UPDATE schedules SET in_from=?, in_to=?, out_from=?, out_to=? WHERE id=?",
                           default_windows(st, en) + (sid,))
+        # Local (sede) de cada biométrico y de cada departamento: avisa cuando alguien marca en otro local
+        for table in ("devices", "departments"):
+            if "sede" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN sede TEXT")
         _merge_duplicate_devices(c)
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_devices_host_port ON devices(host, port)")
         if not c.execute("SELECT 1 FROM users").fetchone():
@@ -256,6 +260,8 @@ def restore_zip(raw: bytes):
         z = zipfile.ZipFile(io.BytesIO(raw))
     except zipfile.BadZipFile:
         raise ValueError("El archivo no es un .zip válido.")
+    if sum(i.file_size for i in z.infolist()) > 2 * 1024 ** 3:
+        raise ValueError("El .zip es demasiado grande para ser un respaldo de Paso Largo.")
     if BACKUP_DB not in z.namelist():
         raise ValueError("El .zip no contiene asistencia.db (¿es un respaldo de Paso Largo?).")
     with tempfile.TemporaryDirectory() as tmp:

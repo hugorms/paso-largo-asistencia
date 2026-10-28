@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import logging
@@ -15,16 +16,18 @@ from fastapi.templating import Jinja2Templates
 from openpyxl import load_workbook
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import attendance, db, devices, reports
+from . import attendance, db, devices, reports, seguridad
 from .isapi import MINOR_FAIL, MINOR_NAMES, ISAPIError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 SECRET = db.init()
 
-app = FastAPI(title="Paso Largo", docs_url=None, redoc_url=None)
+app = FastAPI(title="Paso Largo", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 app.add_middleware(SessionMiddleware, secret_key=SECRET, max_age=12 * 3600, same_site="lax")
+# Va después de la sesión para quedar por fuera: CSRF, cabeceras de seguridad y cookie segura por HTTPS
+app.middleware("http")(seguridad.middleware)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals.update(local_offset=devices.local_offset, hm=attendance.hm, colors=attendance.STATUS_COLORS, minor_names=MINOR_NAMES,
                              days=reports.DAYS, today=date.today, clock_warnings=devices.CLOCK_WARNINGS,
@@ -34,6 +37,8 @@ templates.env.globals.update(local_offset=devices.local_offset, hm=attendance.hm
 _version_file = Path(__file__).parent.parent / "VERSION"
 templates.env.globals["version"] = _version_file.read_text().strip() if _version_file.exists() else "local"
 
+DEFAULT_PASSWORD = "admin123"
+MIN_PASSWORD = 8
 ROLES = {"admin": "Administrador", "supervisor": "Supervisor", "consulta": "Consulta"}
 LEAVE_KINDS = ["Vacaciones", "Permiso médico", "Permiso personal", "Licencia", "Comisión de servicio", "Otro"]
 poller = devices.Poller()
@@ -58,8 +63,13 @@ async def _redir(request, exc):
 def user(request: Request, *roles):
     uid = request.session.get("uid")
     u = db.q1("SELECT * FROM users WHERE id=? AND active=1", (uid,)) if uid else None
-    if not u:
+    if not u or request.session.get("pv") != seguridad.password_tag(SECRET, u["password_hash"]):
+        # sin sesión, o la contraseña cambió desde que entró: hay que volver a ingresar
+        request.session.pop("uid", None)
         raise Redirect("/login")
+    if request.session.get("cambiar_clave") and request.url.path not in ("/cuenta", "/logout"):
+        flash(request, "Antes de seguir, cambia la contraseña por defecto.", "warning")
+        raise Redirect("/cuenta")
     if roles and u["role"] not in roles:
         flash(request, "No tienes permiso para esa sección.", "danger")
         raise Redirect("/")
@@ -93,18 +103,34 @@ def login_page(request: Request):
                                                               "flashes": request.session.pop("flash", [])})
 
 
+_DUMMY_HASH = db.hash_password(uuid.uuid4().hex)
+
+
 @app.post("/login")
 async def login(request: Request):
     f = await form(request)
-    u = db.q1("SELECT * FROM users WHERE username=? AND active=1", (f.get("username", ""),))
-    if not u or not db.check_password(f.get("password", ""), u["password_hash"]):
-        return templates.TemplateResponse(request, "login.html", {"error": "Usuario o contraseña incorrectos",
-                                                                  "company": db.get_setting("company")})
+    username, ip = f.get("username", "")[:64], seguridad.client_ip(request)
+    error = lambda msg, status=200: templates.TemplateResponse(
+        request, "login.html", {"error": msg, "company": db.get_setting("company")}, status_code=status)
+    wait = seguridad.login_blocked(ip, username)
+    if wait:
+        return error(f"Demasiados intentos fallidos. Espera {wait} minutos y vuelve a intentar.", 429)
+    u = db.q1("SELECT * FROM users WHERE username=? AND active=1", (username,))
+    # Se compara igual aunque el usuario no exista, para no delatar qué usuarios existen
+    good = await run_in_threadpool(db.check_password, f.get("password", ""), u["password_hash"] if u else _DUMMY_HASH)
+    if not u or not good:
+        seguridad.login_failed(ip, username)
+        db.audit(username, "ingreso fallido", ip)
+        await asyncio.sleep(1)
+        return error("Usuario o contraseña incorrectos")
+    seguridad.login_ok(ip, username)
     request.session.clear()
     request.session["uid"] = u["id"]
-    db.audit(u["username"], "login")
-    if f.get("password") == "admin123":
-        flash(request, "Estás usando la contraseña por defecto. Cámbiala en Mi cuenta.", "warning")
+    request.session["pv"] = seguridad.password_tag(SECRET, u["password_hash"])
+    db.audit(u["username"], "login", ip)
+    if f.get("password") == DEFAULT_PASSWORD:
+        request.session["cambiar_clave"] = True
+        return back("/cuenta")
     return back("/")
 
 
@@ -124,10 +150,16 @@ async def account_save(request: Request):
     u, f = user(request), await form(request)
     if not db.check_password(f.get("current", ""), u["password_hash"]):
         flash(request, "La contraseña actual no es correcta.", "danger")
-    elif len(f.get("new", "")) < 6 or f["new"] != f.get("confirm"):
-        flash(request, "La nueva contraseña debe tener 6+ caracteres y coincidir.", "danger")
+    elif len(f.get("new", "")) < MIN_PASSWORD or f["new"] != f.get("confirm"):
+        flash(request, f"La nueva contraseña debe tener {MIN_PASSWORD}+ caracteres y coincidir.", "danger")
+    elif f["new"] == DEFAULT_PASSWORD or f["new"] == f.get("current"):
+        flash(request, "Elige una contraseña distinta a la anterior.", "danger")
     else:
-        db.ex("UPDATE users SET password_hash=? WHERE id=?", (db.hash_password(f["new"]), u["id"]))
+        new_hash = db.hash_password(f["new"])
+        db.ex("UPDATE users SET password_hash=? WHERE id=?", (new_hash, u["id"]))
+        # Esta sesión sigue abierta; las demás sesiones de este usuario se cierran
+        request.session["pv"] = seguridad.password_tag(SECRET, new_hash)
+        request.session.pop("cambiar_clave", None)
         db.audit(u["username"], "cambio de contraseña")
         flash(request, "Contraseña actualizada.")
     return back("/cuenta")
@@ -168,16 +200,31 @@ def trend_data(days: int):
     return {"days": days, "series": series, "total": total, "prev": prev}
 
 
+def sedes():
+    """Locales ya escritos en equipos y departamentos (para sugerirlos al escribir)."""
+    return [r["s"] for r in db.q("""SELECT DISTINCT trim(sede) s FROM (SELECT sede FROM devices UNION ALL
+                                    SELECT sede FROM departments) WHERE COALESCE(trim(sede),'')<>'' ORDER BY 1""")]
+
+
+def _mark_away(evs):
+    """Marca los eventos hechos en un equipo de otro local que el del departamento del empleado."""
+    for ev in evs:
+        ev["away"] = ev.get("dev_sede") if attendance.away_from(ev.get("dep_sede"), ev.get("dev_sede")) else None
+    return evs
+
+
 def dashboard_data(days: int = 7):
     today = date.today()
     rows = attendance.compute(today, today)
     count = lambda st: sum(1 for r in rows if r["status"] == st)
     fails = ",".join(map(str, sorted(MINOR_FAIL)))
-    last = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device FROM events ev
+    last = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device, d.sede AS dev_sede,
+                   dp.sede AS dep_sede, dp.name AS department FROM events ev
                    LEFT JOIN employees e ON e.employee_no=ev.employee_no LEFT JOIN devices d ON d.id=ev.device_id
+                   LEFT JOIN departments dp ON dp.id=e.department_id
                    WHERE ev.employee_no IS NOT NULL OR ev.minor IN ({fails})
                    ORDER BY ev.event_time DESC, ev.id DESC LIMIT 15""")
-    for ev in last:
+    for ev in _mark_away(last):
         ev["minor_name"] = MINOR_NAMES.get(ev["minor"], f"Evento {ev['minor']}") if ev["source"] == "equipo" else "Marca manual"
     devs = db.q("SELECT id, name, online, last_seen, last_error FROM devices WHERE active=1")
     return {"total": db.q1("SELECT COUNT(*) n FROM employees WHERE active=1")["n"],
@@ -187,6 +234,8 @@ def dashboard_data(days: int = 7):
             "late_list": [{"name": r["name"], "entry": r["entry"].strftime("%H:%M"), "late": r["late_min"]}
                           for r in rows if r["status"] == "Tarde"],
             "absent_list": [r["name"] for r in rows if r["status"] in ("Ausente", "Pendiente")],
+            "away_list": [{"name": r["name"], "department": r["department"], "home": r["home_sede"],
+                           "sedes": ", ".join(r["away"])} for r in rows if r["away"]],
             "trend": trend_data(days), "events": last, "devices": devs, "now": datetime.now().strftime("%H:%M:%S")}
 
 
@@ -485,6 +534,7 @@ async def employee_face(request: Request, eid: int):
 def config(request: Request):
     u = user(request, "admin", "supervisor")
     return render(request, "config.html", u, departments=db.q("SELECT * FROM departments ORDER BY name"),
+                  sedes=sedes(),
                   schedules=db.q("SELECT * FROM schedules ORDER BY name"),
                   holidays=db.q("SELECT * FROM holidays ORDER BY date DESC"),
                   settings={k: db.get_setting(k) for k in ("company", "poll_seconds", "min_gap_minutes")})
@@ -495,7 +545,9 @@ async def config_save(request: Request, what: str):
     u = user(request, "admin", "supervisor")
     f = await form(request)
     if what == "departamento" and f.get("name"):
-        db.ex("INSERT OR IGNORE INTO departments(name) VALUES (?)", (f["name"],))
+        db.ex("INSERT OR IGNORE INTO departments(name, sede) VALUES (?,?)", (f["name"], f.get("sede") or None))
+    elif what == "departamento-sede" and f.get("id"):
+        db.ex("UPDATE departments SET sede=? WHERE id=?", (f.get("sede") or None, f["id"]))
     elif what == "departamento-eliminar":
         db.ex("UPDATE employees SET department_id=NULL WHERE department_id=?", (f["id"],))
         db.ex("DELETE FROM departments WHERE id=?", (f["id"],))
@@ -654,13 +706,14 @@ def events(request: Request, desde: str = "", hasta: str = "", emp: str = "", de
         args.append(dev)
     if not todos:
         where.append("ev.employee_no IS NOT NULL")
-    rows = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device,
-                    s.in_from, s.in_to, s.out_from, s.out_to FROM events ev
+    rows = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device, d.sede AS dev_sede,
+                    dp.sede AS dep_sede, dp.name AS department, s.in_from, s.in_to, s.out_from, s.out_to FROM events ev
                     LEFT JOIN employees e ON e.employee_no=ev.employee_no LEFT JOIN devices d ON d.id=ev.device_id
+                    LEFT JOIN departments dp ON dp.id=e.department_id
                     LEFT JOIN schedules s ON s.id=e.schedule_id
                     WHERE {' AND '.join(where)} ORDER BY ev.event_time DESC LIMIT 1000""", args)
     roles = attendance.mark_roles(d1, d2)
-    for ev in rows:
+    for ev in _mark_away(rows):
         ev["counts_as"] = (roles.get((ev["employee_no"], datetime.fromisoformat(ev["event_time"])), "No cuenta")
                            if ev["valid"] else "")
     return render(request, "events.html", u, rows=rows, desde=d1, hasta=d2, emp=emp, dev=dev, todos=todos,
@@ -677,7 +730,7 @@ async def event_delete(request: Request, evid: int):
         db.ex("DELETE FROM events WHERE id=?", (evid,))
         db.audit(u["username"], "borrar marca manual", f"{ev['employee_no']} {ev['event_time']} {ev['attendance_status']}")
         flash(request, "Marca manual borrada.")
-    return back(request.headers.get("referer") or "/eventos")
+    return back(seguridad.safe_back(request.headers.get("referer"), "/eventos"))
 
 
 @app.get("/eventos/{evid}/foto")
@@ -735,7 +788,7 @@ def device_list(request: Request):
     u = user(request)
     devs = db.q("""SELECT d.*, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
                    FROM devices d ORDER BY d.name""")
-    return render(request, "devices.html", u, devs=devs)
+    return render(request, "devices.html", u, devs=devs, sedes=sedes())
 
 
 @app.post("/dispositivos/buscar")
@@ -753,7 +806,7 @@ async def device_search(request: Request):
     poller.wake.set()
     devs = db.q("""SELECT d.*, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
                    FROM devices d ORDER BY d.name""")
-    return render(request, "devices.html", u, devs=devs, found=found, nets=nets, searched=True)
+    return render(request, "devices.html", u, devs=devs, found=found, nets=nets, searched=True, sedes=sedes())
 
 
 @app.get("/dispositivos/comparar", response_class=HTMLResponse)
@@ -764,7 +817,7 @@ async def device_compare(request: Request):
     devs = db.q("""SELECT d.*, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
                    FROM devices d ORDER BY d.name""")
     names = {d["id"]: d["name"] for d in devs}
-    return render(request, "devices.html", u, devs=devs, compared=True, cdevs=cdevs, crows=rows,
+    return render(request, "devices.html", u, devs=devs, sedes=sedes(), compared=True, cdevs=cdevs, crows=rows,
                   cerrors={names.get(k, k): v for k, v in errors.items()})
 
 
@@ -812,7 +865,7 @@ async def device_save(request: Request):
     host, port = f["host"].strip().lower(), int(f.get("port") or 80)
     vals = [f["name"], host, port, 1 if f.get("https") else 0, f["username"],
             devices.local_offset(), int(f.get("door_no") or 1), f.get("direction") or "ambos",
-            1 if f.get("active") else 0]
+            1 if f.get("active") else 0, (f.get("sede") or "").strip() or None]
     # Un equipo se identifica por IP + puerto: nunca se registra dos veces
     same = db.q1("SELECT id, name FROM devices WHERE host=? AND port=? AND id<>?", (host, port, f.get("id") or 0))
     if same and f.get("id"):
@@ -820,18 +873,18 @@ async def device_save(request: Request):
         return back("/dispositivos")
     if same:
         f["id"] = str(same["id"])
-        vals[-1] = 1
+        vals[-2] = 1
         flash(request, f"El equipo {host}:{port} ya estaba registrado como «{same['name']}»: se actualizaron "
                        "sus datos en lugar de crear otro.", "info")
     if f.get("id"):
         db.ex("""UPDATE devices SET name=?, host=?, port=?, https=?, username=?, tz_offset=?, door_no=?, direction=?,
-                 active=? WHERE id=?""", vals + [f["id"]])
+                 active=?, sede=? WHERE id=?""", vals + [f["id"]])
         if f.get("password"):
             db.ex("UPDATE devices SET password=? WHERE id=?", (f["password"], f["id"]))
         did = int(f["id"])
     else:
         did = db.ex("""INSERT INTO devices(name, host, port, https, username, tz_offset, door_no, direction, active,
-                       password) VALUES (?,?,?,?,?,?,?,?,?,?)""", vals + [f.get("password", "")])
+                       sede, password) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", vals + [f.get("password", "")])
     db.audit(u["username"], "guardar dispositivo", f"{f['name']} {f['host']}")
     dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
     poller.wake.set()
@@ -892,7 +945,7 @@ async def device_action(request: Request, did: int, action: str):
         db.audit(u["username"], f"dispositivo {action}", dev["name"])
     except ISAPIError as e:
         flash(request, f"{dev['name']}: {e}", "danger")
-    return back(request.headers.get("referer") or "/dispositivos")
+    return back(seguridad.safe_back(request.headers.get("referer"), "/dispositivos"))
 
 
 # ------------------------------------------------------------------ usuarios del sistema
@@ -907,6 +960,9 @@ def users(request: Request):
 async def user_save(request: Request):
     u = user(request, "admin")
     f = await form(request)
+    if f.get("role", "consulta") not in ROLES:
+        flash(request, "Rol no válido.", "danger")
+        return back("/usuarios")
     if f.get("id"):
         if int(f["id"]) == u["id"] and (f.get("role") != "admin" or not f.get("active")):
             flash(request, "No puedes quitarte el rol de administrador ni desactivarte.", "danger")
@@ -914,10 +970,16 @@ async def user_save(request: Request):
         db.ex("UPDATE users SET full_name=?, role=?, active=? WHERE id=?",
               (f.get("full_name"), f["role"], 1 if f.get("active") else 0, f["id"]))
         if f.get("password"):
-            db.ex("UPDATE users SET password_hash=? WHERE id=?", (db.hash_password(f["password"]), f["id"]))
+            if len(f["password"]) < MIN_PASSWORD:
+                flash(request, f"La contraseña debe tener {MIN_PASSWORD}+ caracteres.", "danger")
+                return back("/usuarios")
+            new_hash = db.hash_password(f["password"])
+            db.ex("UPDATE users SET password_hash=? WHERE id=?", (new_hash, f["id"]))
+            if int(f["id"]) == u["id"]:
+                request.session["pv"] = seguridad.password_tag(SECRET, new_hash)
     else:
-        if not f.get("username") or len(f.get("password", "")) < 6:
-            flash(request, "Usuario y contraseña (6+ caracteres) son obligatorios.", "danger")
+        if not f.get("username") or len(f.get("password", "")) < MIN_PASSWORD:
+            flash(request, f"Usuario y contraseña ({MIN_PASSWORD}+ caracteres) son obligatorios.", "danger")
             return back("/usuarios")
         if db.q1("SELECT 1 FROM users WHERE username=?", (f["username"],)):
             flash(request, "Ese nombre de usuario ya existe.", "danger")

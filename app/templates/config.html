@@ -44,8 +44,11 @@
 </div>
 <div class="col-xl-4">
   <div class="card mb-3"><div class="card-header">Departamentos</div><div class="card-body border-bottom">
-    <form method="post" action="/configuracion/departamento" class="d-flex gap-2"><input name="name" class="form-control" required placeholder="Nuevo departamento"><button class="btn btn-primary btn-icon" title="Agregar"><i class="bi bi-plus-lg"></i></button></form></div>
-    <ul class="list-group list-group-flush">{% for dp in departments %}<li class="list-group-item d-flex justify-content-between align-items-center">{{ dp.name }}<form method="post" action="/configuracion/departamento-eliminar" onsubmit="return confirm('¿Quitar {{ dp.name }}?')"><input type="hidden" name="id" value="{{ dp.id }}"><button class="btn btn-sm btn-outline-danger btn-icon" title="Quitar"><i class="bi bi-x-lg"></i></button></form></li>{% else %}<li class="list-group-item empty"><i class="bi bi-diagram-3"></i>Sin departamentos.</li>{% endfor %}</ul>
+    <datalist id="sedes-list">{% for s in sedes %}<option value="{{ s }}">{% endfor %}</datalist>
+    <form method="post" action="/configuracion/departamento" class="d-flex gap-2"><input name="name" class="form-control" required placeholder="Nuevo departamento"><input name="sede" class="form-control" list="sedes-list" placeholder="Local (ej. Paso Largo)" title="Local al que pertenece: avisa si su gente marca en el biométrico de otro local"><button class="btn btn-primary btn-icon" title="Agregar"><i class="bi bi-plus-lg"></i></button></form></div>
+    <ul class="list-group list-group-flush">{% for dp in departments %}<li class="list-group-item d-flex justify-content-between align-items-center gap-2"><span class="flex-grow-1">{{ dp.name }}</span>
+      <form method="post" action="/configuracion/departamento-sede" class="d-flex" title="Local al que pertenece este departamento"><input type="hidden" name="id" value="{{ dp.id }}"><input name="sede" value="{{ dp.sede or '' }}" list="sedes-list" class="form-control form-control-sm" style="max-width:9rem" placeholder="Local" onchange="this.form.submit()" aria-label="Local de {{ dp.name }}"></form>
+      <form method="post" action="/configuracion/departamento-eliminar" onsubmit="return confirm('¿Quitar {{ dp.name }}?')"><input type="hidden" name="id" value="{{ dp.id }}"><button class="btn btn-sm btn-outline-danger btn-icon" title="Quitar"><i class="bi bi-x-lg"></i></button></form></li>{% else %}<li class="list-group-item empty"><i class="bi bi-diagram-3"></i>Sin departamentos.</li>{% endfor %}</ul>
   </div>
   {% if u.role == 'admin' %}
   <div class="card"><div class="card-header">General</div><div class="card-body">
