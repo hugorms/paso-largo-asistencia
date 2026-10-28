@@ -111,3 +111,17 @@ En Dokploy el servicio Compose usa el proveedor **Git** con `https://github.com/
 rama `main` y ruta `./servidor/docker-compose.dokploy.yml`. Los datos viven en `/home/paso_largo/paso-largo/datos`.
 Para actualizar basta con hacer `git push` a `main`: el servidor revisa GitHub cada 2 minutos y despliega solo
 (script `~/paso-largo-auto-deploy.sh` en cron; registro en `~/paso-largo-auto-deploy.log`).
+
+## Abrirlo a internet (túnel de Cloudflare)
+
+El sistema se puede publicar con un túnel de Cloudflare sin abrir puertos en el router. Ya trae estas protecciones (`app/seguridad.py`):
+
+- Tras 5 intentos fallidos de ingreso desde una IP (o 10 contra un mismo usuario) se bloquea 15 minutos. Los fallos quedan en Usuarios → registro.
+- Si alguien entra con la contraseña por defecto (`admin123`), el sistema no deja hacer nada hasta cambiarla. Contraseñas de 8+ caracteres.
+- Al cambiar una contraseña se cierran las demás sesiones abiertas con la vieja.
+- Los formularios solo se aceptan desde las páginas del propio sistema (protección CSRF).
+- Por HTTPS la cookie de sesión va marcada `Secure`; en la red local (http) sigue funcionando igual.
+- Cabeceras de seguridad (no se puede meter en un iframe, CSP, sin caché de datos de empleados) y límite de 100 MB por subida.
+
+En el túnel publica **solo** el puerto 8000 (la asistencia). Nunca el 3000 (Dokploy) ni el 22 (SSH).
+Si un proxy cambia el nombre del sitio y los formularios dan «Solicitud rechazada», agrega el dominio en la variable `ORIGENES_PERMITIDOS` (ej. `asistencia.clubpasolargo.com.ve`).
