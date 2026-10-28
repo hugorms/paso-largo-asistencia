@@ -816,52 +816,6 @@ async def device_face(request: Request, did: int, no: str):
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 
-@app.get("/dispositivos/comparar", response_class=HTMLResponse)
-async def device_compare(request: Request):
-    """Con dos o más biométricos: revisa que cada persona tenga el mismo N° y su rostro en todos."""
-    u = user(request, "admin")
-    cdevs, rows, errors = await run_in_threadpool(devices.compare_users)
-    devs = db.q("""SELECT d.*, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
-                   FROM devices d ORDER BY d.name""")
-    names = {d["id"]: d["name"] for d in devs}
-    return render(request, "devices.html", u, devs=devs, compared=True, cdevs=cdevs, crows=rows,
-                  cerrors={names.get(k, k): v for k, v in errors.items()})
-
-
-@app.post("/dispositivos/copiar")
-async def device_copy(request: Request):
-    u = user(request, "admin")
-    nos = [v for k, v in (await request.form()).multi_items() if k == "no"]
-    done, msgs = await run_in_threadpool(devices.copy_to_missing, nos)
-    db.audit(u["username"], "copiar rostros entre equipos", ", ".join(nos))
-    if done:
-        flash(request, f"Se copiaron {done} rostros a los equipos donde faltaban.")
-    for m in msgs[:8]:
-        flash(request, m, "warning")
-    return back("/dispositivos/comparar")
-
-
-@app.get("/dispositivos/{did}/rostro/{no}")
-async def device_face(request: Request, did: int, no: str):
-    """Foto del rostro guardado en ese equipo para ese N° (para comparar entre equipos)."""
-    user(request, "admin")
-    dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
-    if not dev:
-        return Response(status_code=404)
-
-    def get():
-        c = devices.client(dev)
-        url = c.face_url(no)
-        return c.fetch_picture(url) if url else None
-    try:
-        data = await run_in_threadpool(get)
-    except ISAPIError:
-        data = None
-    if not data:
-        return Response(status_code=404)
-    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
-
-
 @app.post("/dispositivos/guardar")
 async def device_save(request: Request):
     u = user(request, "admin")
