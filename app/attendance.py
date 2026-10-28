@@ -47,6 +47,16 @@ def away_from(home, sede) -> bool:
     return bool(norm(home)) and bool(norm(sede)) and norm(home) != norm(sede)
 
 
+def route(marks):
+    """Recorrido del día por local: [(local, hora de la primera marca allí)], sin repetir marcas seguidas
+    en el mismo local. Ej.: [('Paso Largo', 08:00), ('San Gonzalo', 11:40), ('Paso Largo', 15:10)]."""
+    out = []
+    for t, sede in sorted(marks):
+        if not out or out[-1][0].lower() != sede.lower():
+            out.append((sede, t))
+    return out
+
+
 def parse_date(s, default=None):
     try:
         return datetime.strptime(s, "%Y-%m-%d").date()
@@ -107,6 +117,7 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
     sedes = {d["id"]: (d["sede"] or "").strip() for d in db.q("SELECT id, sede FROM devices")}
     home = {e["employee_no"]: (e["home_sede"] or "").strip() for e in emps}
     away = defaultdict(set)  # (n° empleado, día) -> locales distintos al de su departamento donde marcó
+    trail = defaultdict(list)  # (n° empleado, día) -> [(hora, local)] de cada marca en un equipo con local
     # El tipo Entrada/Salida que manda el terminal solo se respeta si ese equipo alguna vez mandó una
     # "Salida": hay equipos que ponen "Entrada" a todas las marcas y entonces nadie tendría salida.
     trusts_status = {r["device_id"] for r in db.q(
@@ -130,6 +141,8 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
             kind = {"entrada": "in", "salida": "out"}.get(devices.get(ev["device_id"]), "any")
         marks[(ev["employee_no"], t.date())].append((t, kind, manual))
         sede = sedes.get(ev["device_id"])
+        if sede:
+            trail[(ev["employee_no"], t.date())].append((t, sede))
         if sede and home.get(ev["employee_no"]) and away_from(home[ev["employee_no"]], sede):
             away[(ev["employee_no"], t.date())].add(sede)
 
@@ -162,7 +175,8 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
                    "schedule": e["schedule_name"] or "Sin horario", "entry": entry, "exit": exit_,
                    "marks": len(ms), "outside": outside, "late_min": 0, "early_min": 0, "overtime_min": 0,
                    "worked_min": 0, "status": "", "note": "", "home_sede": e["home_sede"] or "",
-                   "away": sorted(away.get((e["employee_no"], d), ()))}
+                   "away": sorted(away.get((e["employee_no"], d), ())),
+                   "trail": route(trail.get((e["employee_no"], d), []))}
 
             if entry and exit_:
                 span = (exit_ - entry).total_seconds() / 60
