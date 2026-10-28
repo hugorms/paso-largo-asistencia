@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from datetime import datetime, timedelta
 
 from PIL import Image, ImageOps
@@ -386,6 +387,103 @@ def remove_employee(emp):
     return results
 
 
+# ------------------------------------------------------------------ varios equipos
+def _meaningful(name, no):
+    """Nombre normalizado si es un nombre real (no vacío, ni el número, ni «Empleado N»)."""
+    n = unicodedata.normalize("NFKD", (name or "").strip().lower())
+    n = " ".join("".join(ch for ch in n if not unicodedata.combining(ch)).split())
+    return "" if not n or n == str(no).lower() or n == f"empleado {str(no).lower()}" else n
+
+
+def compare_users():
+    """Compara los usuarios de todos los equipos activos. Con dos o más biométricos, una misma persona debe
+    tener el MISMO N° de empleado en todos: si no, sus marcas se cuentan como de otra persona.
+    Devuelve (equipos, filas, errores). Estado de cada fila: conflicto | duplicado | falta | ok."""
+    devs, errors, data = db.q("SELECT * FROM devices WHERE active=1 ORDER BY id"), {}, {}
+    for dev in devs:
+        try:
+            data[dev["id"]] = {str(u.get("employeeNo") or "").strip(): u for u in client(dev).search_users()}
+        except ISAPIError as e:
+            errors[dev["id"]] = str(e)
+    devs = [d for d in devs if d["id"] in data]
+    app_names = {e["employee_no"]: e for e in db.q("SELECT id, employee_no, name, active FROM employees")}
+    nos = sorted({no for users in data.values() for no in users if no},
+                 key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n))
+    rows = []
+    for no in nos:
+        per = {}
+        for dev in devs:
+            u = data[dev["id"]].get(no)
+            per[dev["id"]] = u and {"name": u.get("name") or "", "faces": int(u.get("numOfFace") or 0)}
+        names = {_meaningful(v["name"], no) for v in per.values() if v} - {""}
+        emp = app_names.get(no) or {}
+        st = ("conflicto" if len(names) > 1 else
+              "falta" if any(not v or not v["faces"] for v in per.values()) else "ok")
+        rows.append({"no": no, "app_name": emp.get("name"), "emp_id": emp.get("id"), "per": per, "status": st,
+                     "names": names})
+    # La misma persona (mismo nombre) con N° distinto en cada equipo
+    by_name = {}
+    for r in rows:
+        for n in r["names"]:
+            by_name.setdefault(n, set()).add(r["no"])
+    for r in rows:
+        others = sorted(set().union(*(by_name[n] for n in r["names"])) - {r["no"]}) if r["names"] else []
+        if others and r["status"] != "conflicto":
+            r["status"], r["others"] = "duplicado", others
+    return devs, rows, errors
+
+
+def copy_to_missing(nos):
+    """Copia usuario + rostro desde el equipo que lo tiene a los equipos activos donde falta (o no tiene
+    rostro). Nunca toca un N° que en otro equipo es de otra persona. Devuelve (copiados, mensajes)."""
+    devs, rows, errors = compare_users()
+    by_id = {d["id"]: d for d in devs}
+    done, msgs = 0, []
+    for r in rows:
+        if r["no"] not in nos:
+            continue
+        if r["status"] != "falta":
+            msgs.append(f"N° {r['no']}: no se copió ({r['status']}), revísalo a mano.")
+            continue
+        src = next((by_id[did] for did, v in r["per"].items() if v and v["faces"]), None)
+        if not src:
+            msgs.append(f"N° {r['no']}: no tiene rostro en ningún equipo.")
+            continue
+        try:
+            sc = client(src)
+            url = sc.face_url(r["no"])
+            jpeg = prepare_face(sc.fetch_picture(url)) if url else None
+        except Exception as e:
+            msgs.append(f"N° {r['no']}: no se pudo leer el rostro de «{src['name']}»: {e}")
+            continue
+        if not jpeg:
+            msgs.append(f"N° {r['no']}: «{src['name']}» no entregó la foto del rostro.")
+            continue
+        name = r["app_name"] or r["per"][src["id"]]["name"] or f"Empleado {r['no']}"
+        for did, v in r["per"].items():
+            if v and v["faces"]:
+                continue
+            dev = by_id[did]
+            try:
+                c = client(dev)
+                if not v:
+                    c.upsert_user(r["no"], name, door_no=dev["door_no"] or 1)
+                c.upload_face(r["no"], jpeg)
+                ok, m = True, f"Copiado desde {src['name']}"
+                done += 1
+            except ISAPIError as e:
+                ok, m = False, str(e)
+                msgs.append(f"N° {r['no']} en «{dev['name']}»: {e}")
+            if r["emp_id"]:
+                db.ex("""INSERT INTO employee_sync(employee_id, device_id, status, message, updated_at) VALUES (?,?,?,?,?)
+                         ON CONFLICT(employee_id, device_id) DO UPDATE SET status=excluded.status,
+                         message=excluded.message, updated_at=excluded.updated_at""",
+                      (r["emp_id"], did, "ok" if ok else "error", m, _now()))
+    if done:
+        db.audit("sistema", "rostros copiados entre equipos", ", ".join(nos))
+    return done, msgs
+
+
 class Poller(threading.Thread):
     """Hilo que descarga eventos de cada equipo. Se despierta al instante cuando un AlertListener
     recibe un aviso del equipo; si no, revisa cada N segundos como respaldo."""
@@ -402,6 +500,7 @@ class Poller(threading.Thread):
         self.down_since = {}  # desde cuándo no responde
         self.searched = {}  # última vez que se lo buscó en la red
         self.notes = {}     # resultado de esa búsqueda, se muestra junto al error
+        self.searching = set()  # equipos que se están buscando ahora mismo
 
     def _ensure_listeners(self, devs):
         for dev in devs:
@@ -421,6 +520,8 @@ class Poller(threading.Thread):
     def _quick_pull(self):
         """El equipo avisó una marca: solo se descargan los últimos minutos, sin tareas de mantenimiento."""
         for dev in db.q("SELECT * FROM devices WHERE active=1"):
+            if self.fails.get(dev["id"]):
+                continue  # un equipo caído no debe demorar las marcas del otro; lo revisa la vuelta normal
             try:
                 n = pull_events(dev, quick=True)
                 if n:
@@ -438,13 +539,23 @@ class Poller(threading.Thread):
         every = 30 if time.time() - self.down_since[did] < 600 else 120
         if self.fails[did] < 2 or time.time() - self.searched.get(did, 0) < every:
             return
+        if did in self.searching:
+            return
         self.searched[did] = time.time()
+        # La búsqueda tarda varios segundos: se hace aparte para no demorar las marcas de los otros equipos
+        self.searching.add(did)
+        threading.Thread(target=self._search, args=(dev, err), daemon=True, name=f"buscar-{did}").start()
+
+    def _search(self, dev, err):
+        did = dev["id"]
         log.info("%s: no responde en %s, buscándolo en la red…", dev["name"], dev["host"])
         try:
             moved, note = relocate(dev)
         except Exception as e:
             log.exception("Error buscando %s en la red", dev["name"])
             moved, note = None, f"No se pudo buscar en la red: {e}"
+        finally:
+            self.searching.discard(did)
         if moved:
             self._reconnected(did)
         else:
