@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 import re
@@ -14,16 +15,18 @@ from fastapi.templating import Jinja2Templates
 from openpyxl import load_workbook
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import attendance, db, devices, reports
+from . import attendance, db, devices, reports, seguridad
 from .isapi import MINOR_FAIL, MINOR_NAMES, ISAPIError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 SECRET = db.init()
 
-app = FastAPI(title="Paso Largo", docs_url=None, redoc_url=None)
+app = FastAPI(title="Paso Largo", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 app.add_middleware(SessionMiddleware, secret_key=SECRET, max_age=12 * 3600, same_site="lax")
+# Va después de la sesión para quedar por fuera: CSRF, cabeceras de seguridad y cookie segura por HTTPS
+app.middleware("http")(seguridad.middleware)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals.update(local_offset=devices.local_offset, hm=attendance.hm, colors=attendance.STATUS_COLORS, minor_names=MINOR_NAMES,
                              days=reports.DAYS, today=date.today, clock_warnings=devices.CLOCK_WARNINGS,
@@ -33,6 +36,8 @@ templates.env.globals.update(local_offset=devices.local_offset, hm=attendance.hm
 _version_file = Path(__file__).parent.parent / "VERSION"
 templates.env.globals["version"] = _version_file.read_text().strip() if _version_file.exists() else "local"
 
+DEFAULT_PASSWORD = "admin123"
+MIN_PASSWORD = 8
 ROLES = {"admin": "Administrador", "supervisor": "Supervisor", "consulta": "Consulta"}
 LEAVE_KINDS = ["Vacaciones", "Permiso médico", "Permiso personal", "Licencia", "Comisión de servicio", "Otro"]
 poller = devices.Poller()
@@ -57,8 +62,13 @@ async def _redir(request, exc):
 def user(request: Request, *roles):
     uid = request.session.get("uid")
     u = db.q1("SELECT * FROM users WHERE id=? AND active=1", (uid,)) if uid else None
-    if not u:
+    if not u or request.session.get("pv") != seguridad.password_tag(SECRET, u["password_hash"]):
+        # sin sesión, o la contraseña cambió desde que entró: hay que volver a ingresar
+        request.session.pop("uid", None)
         raise Redirect("/login")
+    if request.session.get("cambiar_clave") and request.url.path not in ("/cuenta", "/logout"):
+        flash(request, "Antes de seguir, cambia la contraseña por defecto.", "warning")
+        raise Redirect("/cuenta")
     if roles and u["role"] not in roles:
         flash(request, "No tienes permiso para esa sección.", "danger")
         raise Redirect("/")
@@ -92,18 +102,34 @@ def login_page(request: Request):
                                                               "flashes": request.session.pop("flash", [])})
 
 
+_DUMMY_HASH = db.hash_password(uuid.uuid4().hex)
+
+
 @app.post("/login")
 async def login(request: Request):
     f = await form(request)
-    u = db.q1("SELECT * FROM users WHERE username=? AND active=1", (f.get("username", ""),))
-    if not u or not db.check_password(f.get("password", ""), u["password_hash"]):
-        return templates.TemplateResponse(request, "login.html", {"error": "Usuario o contraseña incorrectos",
-                                                                  "company": db.get_setting("company")})
+    username, ip = f.get("username", "")[:64], seguridad.client_ip(request)
+    error = lambda msg, status=200: templates.TemplateResponse(
+        request, "login.html", {"error": msg, "company": db.get_setting("company")}, status_code=status)
+    wait = seguridad.login_blocked(ip, username)
+    if wait:
+        return error(f"Demasiados intentos fallidos. Espera {wait} minutos y vuelve a intentar.", 429)
+    u = db.q1("SELECT * FROM users WHERE username=? AND active=1", (username,))
+    # Se compara igual aunque el usuario no exista, para no delatar qué usuarios existen
+    good = await run_in_threadpool(db.check_password, f.get("password", ""), u["password_hash"] if u else _DUMMY_HASH)
+    if not u or not good:
+        seguridad.login_failed(ip, username)
+        db.audit(username, "ingreso fallido", ip)
+        await asyncio.sleep(1)
+        return error("Usuario o contraseña incorrectos")
+    seguridad.login_ok(ip, username)
     request.session.clear()
     request.session["uid"] = u["id"]
-    db.audit(u["username"], "login")
-    if f.get("password") == "admin123":
-        flash(request, "Estás usando la contraseña por defecto. Cámbiala en Mi cuenta.", "warning")
+    request.session["pv"] = seguridad.password_tag(SECRET, u["password_hash"])
+    db.audit(u["username"], "login", ip)
+    if f.get("password") == DEFAULT_PASSWORD:
+        request.session["cambiar_clave"] = True
+        return back("/cuenta")
     return back("/")
 
 
@@ -123,10 +149,16 @@ async def account_save(request: Request):
     u, f = user(request), await form(request)
     if not db.check_password(f.get("current", ""), u["password_hash"]):
         flash(request, "La contraseña actual no es correcta.", "danger")
-    elif len(f.get("new", "")) < 6 or f["new"] != f.get("confirm"):
-        flash(request, "La nueva contraseña debe tener 6+ caracteres y coincidir.", "danger")
+    elif len(f.get("new", "")) < MIN_PASSWORD or f["new"] != f.get("confirm"):
+        flash(request, f"La nueva contraseña debe tener {MIN_PASSWORD}+ caracteres y coincidir.", "danger")
+    elif f["new"] == DEFAULT_PASSWORD or f["new"] == f.get("current"):
+        flash(request, "Elige una contraseña distinta a la anterior.", "danger")
     else:
-        db.ex("UPDATE users SET password_hash=? WHERE id=?", (db.hash_password(f["new"]), u["id"]))
+        new_hash = db.hash_password(f["new"])
+        db.ex("UPDATE users SET password_hash=? WHERE id=?", (new_hash, u["id"]))
+        # Esta sesión sigue abierta; las demás sesiones de este usuario se cierran
+        request.session["pv"] = seguridad.password_tag(SECRET, new_hash)
+        request.session.pop("cambiar_clave", None)
         db.audit(u["username"], "cambio de contraseña")
         flash(request, "Contraseña actualizada.")
     return back("/cuenta")
@@ -691,7 +723,7 @@ async def event_delete(request: Request, evid: int):
         db.ex("DELETE FROM events WHERE id=?", (evid,))
         db.audit(u["username"], "borrar marca manual", f"{ev['employee_no']} {ev['event_time']} {ev['attendance_status']}")
         flash(request, "Marca manual borrada.")
-    return back(request.headers.get("referer") or "/eventos")
+    return back(seguridad.safe_back(request.headers.get("referer"), "/eventos"))
 
 
 @app.get("/eventos/{evid}/foto")
@@ -906,7 +938,7 @@ async def device_action(request: Request, did: int, action: str):
         db.audit(u["username"], f"dispositivo {action}", dev["name"])
     except ISAPIError as e:
         flash(request, f"{dev['name']}: {e}", "danger")
-    return back(request.headers.get("referer") or "/dispositivos")
+    return back(seguridad.safe_back(request.headers.get("referer"), "/dispositivos"))
 
 
 # ------------------------------------------------------------------ usuarios del sistema
@@ -921,6 +953,9 @@ def users(request: Request):
 async def user_save(request: Request):
     u = user(request, "admin")
     f = await form(request)
+    if f.get("role", "consulta") not in ROLES:
+        flash(request, "Rol no válido.", "danger")
+        return back("/usuarios")
     if f.get("id"):
         if int(f["id"]) == u["id"] and (f.get("role") != "admin" or not f.get("active")):
             flash(request, "No puedes quitarte el rol de administrador ni desactivarte.", "danger")
@@ -928,10 +963,16 @@ async def user_save(request: Request):
         db.ex("UPDATE users SET full_name=?, role=?, active=? WHERE id=?",
               (f.get("full_name"), f["role"], 1 if f.get("active") else 0, f["id"]))
         if f.get("password"):
-            db.ex("UPDATE users SET password_hash=? WHERE id=?", (db.hash_password(f["password"]), f["id"]))
+            if len(f["password"]) < MIN_PASSWORD:
+                flash(request, f"La contraseña debe tener {MIN_PASSWORD}+ caracteres.", "danger")
+                return back("/usuarios")
+            new_hash = db.hash_password(f["password"])
+            db.ex("UPDATE users SET password_hash=? WHERE id=?", (new_hash, f["id"]))
+            if int(f["id"]) == u["id"]:
+                request.session["pv"] = seguridad.password_tag(SECRET, new_hash)
     else:
-        if not f.get("username") or len(f.get("password", "")) < 6:
-            flash(request, "Usuario y contraseña (6+ caracteres) son obligatorios.", "danger")
+        if not f.get("username") or len(f.get("password", "")) < MIN_PASSWORD:
+            flash(request, f"Usuario y contraseña ({MIN_PASSWORD}+ caracteres) son obligatorios.", "danger")
             return back("/usuarios")
         if db.q1("SELECT 1 FROM users WHERE username=?", (f["username"],)):
             flash(request, "Ese nombre de usuario ya existe.", "danger")

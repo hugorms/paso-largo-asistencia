@@ -260,6 +260,8 @@ def restore_zip(raw: bytes):
         z = zipfile.ZipFile(io.BytesIO(raw))
     except zipfile.BadZipFile:
         raise ValueError("El archivo no es un .zip válido.")
+    if sum(i.file_size for i in z.infolist()) > 2 * 1024 ** 3:
+        raise ValueError("El .zip es demasiado grande para ser un respaldo de Paso Largo.")
     if BACKUP_DB not in z.namelist():
         raise ValueError("El .zip no contiene asistencia.db (¿es un respaldo de Paso Largo?).")
     with tempfile.TemporaryDirectory() as tmp:

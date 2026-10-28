@@ -11,6 +11,7 @@ Sistema web de control de asistencia para terminales faciales Hikvision vía ISA
 - `app/reports.py`: exportación Excel (openpyxl) y PDF (reportlab).
 - `app/db.py`: esquema SQLite y helpers `q`, `q1`, `ex`, `audit`. Datos en `datos/` (variable `ASISTENCIA_DATA`).
 - `app/main.py`: rutas web, sesiones y roles (admin, supervisor, consulta).
+- `app/seguridad.py`: protecciones para internet (bloqueo de intentos de ingreso, CSRF por Origin, cabeceras, cookie Secure por HTTPS).
 - `app/templates/`: Jinja2 + Bootstrap 5 local (`app/static/`, sin CDN).
 - `simulador.py`: terminal ISAPI falso en 127.0.0.1:8090 (admin/12345) para probar sin hardware; responde a SADP. `--ip 0.0.0.0 --puerto N` para probar cambios de IP.
 
