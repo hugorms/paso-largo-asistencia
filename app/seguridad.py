@@ -110,7 +110,7 @@ async def middleware(request, call_next):
     h.setdefault("X-Content-Type-Options", "nosniff")
     h.setdefault("X-Frame-Options", "DENY")
     h.setdefault("Referrer-Policy", "same-origin")
-    h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    h.setdefault("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
     h.setdefault("Content-Security-Policy", CSP)
     if not request.url.path.startswith("/static/"):
         # Datos de empleados: que no queden guardados en cachés intermedias ni en el navegador
