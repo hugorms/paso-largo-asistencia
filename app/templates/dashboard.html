@@ -104,7 +104,13 @@ function paint(d, animate){
   }
   document.getElementById('late').innerHTML = d.late_list.map(l => `<li class="list-group-item d-flex justify-content-between"><span>${esc(l.name)}</span><span class="mono">${l.entry} <span class="badge text-bg-warning ms-1">+${l.late} min</span></span></li>`).join('') || empty('emoji-smile','Nadie llegó tarde');
   document.getElementById('awayCard').classList.toggle('d-none', !d.away_list.length);
-  document.getElementById('away').innerHTML = d.away_list.map(a => `<li class="list-group-item"><span class="fw-medium">${esc(a.name)}</span>${a.department ? ` <span class="text-secondary small">de ${esc(a.department)}</span>` : ''} fue a <b>${esc(a.sedes)}</b></li>`).join('');
+  document.getElementById('away').innerHTML = d.away_list.map(a => {
+    const last = a.trail[a.trail.length - 1];
+    const route = a.trail.map((s, i) => `${i ? '→ ' : ''}${esc(s.sede)} <span class="mono">${s.time}</span>`).join(' ');
+    return `<li class="list-group-item"><div class="d-flex justify-content-between gap-2"><span><span class="fw-medium">${esc(a.name)}</span>${a.department ? ` <span class="text-secondary small">de ${esc(a.department)}</span>` : ''}</span>
+      <span class="badge text-bg-${a.back ? 'success' : 'info'} align-self-start">${a.back ? 'Volvió a ' : 'Última marca en '}${esc(last.sede)}</span></div>
+      <div class="small text-secondary">${route}</div></li>`;
+  }).join('');
   document.getElementById('absent').innerHTML = d.absent_list.map(n => `<li class="list-group-item">${esc(n)}</li>`).join('') || empty('check2-circle','Todos marcaron');
   paintTrend(d.trend, animate);
 }

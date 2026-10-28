@@ -235,7 +235,9 @@ def dashboard_data(days: int = 7):
                           for r in rows if r["status"] == "Tarde"],
             "absent_list": [r["name"] for r in rows if r["status"] in ("Ausente", "Pendiente")],
             "away_list": [{"name": r["name"], "department": r["department"], "home": r["home_sede"],
-                           "sedes": ", ".join(r["away"])} for r in rows if r["away"]],
+                           "sedes": ", ".join(r["away"]), "back": not attendance.away_from(r["home_sede"], r["trail"][-1][0]),
+                           "trail": [{"sede": s, "time": t.strftime("%H:%M")} for s, t in r["trail"]]}
+                          for r in rows if r["away"]],
             "trend": trend_data(days), "events": last, "devices": devs, "now": datetime.now().strftime("%H:%M:%S")}
 
 
