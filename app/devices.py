@@ -11,6 +11,12 @@ from datetime import datetime, timedelta
 
 from PIL import Image, ImageOps
 
+try:  # fotos HEIC del iPhone/Samsung
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass
+
 from . import db, discovery
 from .isapi import MINOR_FAIL, ISAPIClient, ISAPIConnError, ISAPIError
 

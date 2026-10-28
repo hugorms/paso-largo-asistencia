@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 import logging
 import re
@@ -311,10 +312,16 @@ async def employee_save(request: Request):
         return back(f"/empleados/{eid}" if eid else "/empleados/nuevo")
 
     photo_name = None
-    upload = raw.get("photo")
-    if upload is not None and getattr(upload, "filename", ""):
+    data = raw.get("photo_data")
+    upload = next((raw.get(k) for k in ("photo", "photo_cam") if getattr(raw.get(k), "filename", "")), None)
+    if (isinstance(data, str) and data) or upload is not None:
         try:
-            jpeg = devices.prepare_face(await upload.read())
+            if isinstance(data, str) and data:
+                # Foto ya achicada en el navegador: "data:image/jpeg;base64,..."
+                content = base64.b64decode(data.split(",", 1)[-1])
+            else:
+                content = await upload.read()
+            jpeg = devices.prepare_face(content)
         except Exception:
             flash(request, "La foto no es una imagen válida.", "danger")
             return back(f"/empleados/{eid}" if eid else "/empleados/nuevo")
