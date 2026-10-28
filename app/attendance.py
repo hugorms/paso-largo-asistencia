@@ -41,6 +41,12 @@ def side(t: datetime, e) -> str:
     return "in" if t < a + (b - a) / 2 else "out"
 
 
+def away_from(home, sede) -> bool:
+    """¿El local del equipo es distinto al del departamento? (sin distinguir mayúsculas ni espacios)"""
+    norm = lambda x: " ".join((x or "").lower().split())
+    return bool(norm(home)) and bool(norm(sede)) and norm(home) != norm(sede)
+
+
 def parse_date(s, default=None):
     try:
         return datetime.strptime(s, "%Y-%m-%d").date()
@@ -89,7 +95,7 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
     if department_id:
         where.append("e.department_id=?")
         args.append(department_id)
-    emps = db.q(f"""SELECT e.*, d.name AS department, s.name AS schedule_name, s.start_time, s.end_time,
+    emps = db.q(f"""SELECT e.*, d.name AS department, d.sede AS home_sede, s.name AS schedule_name, s.start_time, s.end_time,
                     s.tolerance_min, s.lunch_min, s.days, s.in_from, s.in_to, s.out_from, s.out_to
                     FROM employees e LEFT JOIN departments d ON d.id=e.department_id
                     LEFT JOIN schedules s ON s.id=e.schedule_id
@@ -98,6 +104,9 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
         return []
 
     devices = {d["id"]: d["direction"] for d in db.q("SELECT id, direction FROM devices")}
+    sedes = {d["id"]: (d["sede"] or "").strip() for d in db.q("SELECT id, sede FROM devices")}
+    home = {e["employee_no"]: (e["home_sede"] or "").strip() for e in emps}
+    away = defaultdict(set)  # (n° empleado, día) -> locales distintos al de su departamento donde marcó
     # El tipo Entrada/Salida que manda el terminal solo se respeta si ese equipo alguna vez mandó una
     # "Salida": hay equipos que ponen "Entrada" a todas las marcas y entonces nadie tendría salida.
     trusts_status = {r["device_id"] for r in db.q(
@@ -120,6 +129,9 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
         else:
             kind = {"entrada": "in", "salida": "out"}.get(devices.get(ev["device_id"]), "any")
         marks[(ev["employee_no"], t.date())].append((t, kind, manual))
+        sede = sedes.get(ev["device_id"])
+        if sede and home.get(ev["employee_no"]) and away_from(home[ev["employee_no"]], sede):
+            away[(ev["employee_no"], t.date())].add(sede)
 
     holidays = {h["date"]: h["name"] for h in db.q("SELECT date, name FROM holidays WHERE date BETWEEN ? AND ?",
                                                    (start.isoformat(), end.isoformat()))}
@@ -149,7 +161,8 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
                    "department": e["department"] or "", "date": d, "weekday": d.isoweekday(),
                    "schedule": e["schedule_name"] or "Sin horario", "entry": entry, "exit": exit_,
                    "marks": len(ms), "outside": outside, "late_min": 0, "early_min": 0, "overtime_min": 0,
-                   "worked_min": 0, "status": "", "note": ""}
+                   "worked_min": 0, "status": "", "note": "", "home_sede": e["home_sede"] or "",
+                   "away": sorted(away.get((e["employee_no"], d), ()))}
 
             if entry and exit_:
                 span = (exit_ - entry).total_seconds() / 60
@@ -189,6 +202,9 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
                     row["note"] = "Sin marca de entrada"
                 elif row["early_min"]:
                     row["note"] = f"Salida anticipada {row['early_min']} min"
+            if row["away"]:
+                extra = f"Marcó en {', '.join(row['away'])}"
+                row["note"] = f"{extra} · {row['note']}" if row["note"] else extra
             if outside and row["status"] not in ("Feriado", "Justificado"):
                 extra = f"{outside} marca{'s' if outside > 1 else ''} intermedia{'s' if outside > 1 else ''} (no cuenta{'n' if outside > 1 else ''})"
                 row["note"] = f"{row['note']} · {extra}" if row["note"] else extra

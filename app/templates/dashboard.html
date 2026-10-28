@@ -54,6 +54,7 @@
       {% else %}<li class="list-group-item empty"><i class="bi bi-cpu"></i>No hay equipos. <a href="/dispositivos">Agregar uno</a></li>{% endfor %}
       </ul>
     </div>
+    <div class="card mb-3 d-none" id="awayCard"><div class="card-header">Hoy en otro local</div><ul class="list-group list-group-flush" id="away"></ul></div>
     <div class="card mb-3"><div class="card-header">Tardanzas de hoy</div><ul class="list-group list-group-flush" id="late"></ul></div>
     <div class="card"><div class="card-header">Sin marcar hoy</div><ul class="list-group list-group-flush" id="absent"></ul></div>
   </div>
@@ -93,7 +94,7 @@ function paint(d, animate){
   document.getElementById('now').textContent = d.now;
   document.getElementById('events').innerHTML = d.events.map(ev => `<tr><td class="mono">${ev.event_time.slice(11,19)} <span class="text-secondary small">${ev.event_time.slice(8,10)}/${ev.event_time.slice(5,7)}</span></td>
       <td>${esc(ev.emp_name || ev.name || '—')} <span class="text-secondary small">${esc(ev.employee_no||'')}</span></td>
-      <td><span class="badge text-bg-${ev.valid?'success':'secondary'}">${esc(ev.minor_name)}</span></td><td>${esc(ev.device||'Manual')}</td>
+      <td><span class="badge text-bg-${ev.valid?'success':'secondary'}">${esc(ev.minor_name)}</span></td><td>${esc(ev.device||'Manual')}${ev.away ? ` <span class="badge text-bg-info" title="Es de ${esc(ev.department||'')} (${esc(ev.dep_sede||'')})">Fue a ${esc(ev.away)}</span>` : ''}</td>
       <td>${ev.picture_url ? `<button type="button" class="btn btn-sm btn-outline-secondary btn-icon" title="Ver foto en grande" ${photoAttrs(ev)}><i class="bi bi-image"></i></button>` : '—'}</td></tr>`).join('') || empty('clock-history','Sin marcaciones todavía', 5);
   const shot = d.events.find(ev => ev.picture_url && ev.employee_no);
   if (shot && shot.id !== lastShot) {
@@ -102,6 +103,8 @@ function paint(d, animate){
     document.getElementById('lastShotCap').innerHTML = `<span class="fw-medium">${esc(shot.emp_name || shot.name || '—')}</span> <span class="mono text-secondary">${shot.event_time.slice(11,19)} · ${esc(shot.device||'')}</span>`;
   }
   document.getElementById('late').innerHTML = d.late_list.map(l => `<li class="list-group-item d-flex justify-content-between"><span>${esc(l.name)}</span><span class="mono">${l.entry} <span class="badge text-bg-warning ms-1">+${l.late} min</span></span></li>`).join('') || empty('emoji-smile','Nadie llegó tarde');
+  document.getElementById('awayCard').classList.toggle('d-none', !d.away_list.length);
+  document.getElementById('away').innerHTML = d.away_list.map(a => `<li class="list-group-item"><span class="fw-medium">${esc(a.name)}</span>${a.department ? ` <span class="text-secondary small">de ${esc(a.department)}</span>` : ''} fue a <b>${esc(a.sedes)}</b></li>`).join('');
   document.getElementById('absent').innerHTML = d.absent_list.map(n => `<li class="list-group-item">${esc(n)}</li>`).join('') || empty('check2-circle','Todos marcaron');
   paintTrend(d.trend, animate);
 }
