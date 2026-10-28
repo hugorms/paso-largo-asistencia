@@ -301,7 +301,7 @@ def employee_edit(request: Request, eid: int):
 @app.post("/empleados/guardar")
 async def employee_save(request: Request):
     u = user(request, "admin", "supervisor")
-    raw = await request.form()
+    raw = await request.form(max_part_size=8 * 1024 * 1024)  # photo_data (foto en texto) puede pasar de 1 MB
     f = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw.items()}
     eid = int(f["id"]) if f.get("id") else None
     no = f.get("employee_no", "")

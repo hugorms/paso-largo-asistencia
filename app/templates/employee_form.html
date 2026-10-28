@@ -39,7 +39,7 @@
       <input type="file" name="photo_cam" id="photoCam" accept="image/*" capture="user" class="d-none">
       <input type="hidden" name="photo_data" id="photoData">
       <div class="d-flex flex-wrap gap-2">
-        <button type="button" class="btn btn-outline-secondary flex-fill" onclick="document.getElementById('photo').click()"><i class="bi bi-image"></i> Subir foto</button>
+        <button type="button" class="btn btn-outline-secondary flex-fill" id="uploadBtn"><i class="bi bi-image"></i> Subir foto</button>
         <button type="button" class="btn btn-outline-secondary flex-fill" id="camBtn"><i class="bi bi-camera"></i> Cámara</button>
       </div>
       <div class="small text-success mt-2 d-none" id="photoMsg"></div>
@@ -77,6 +77,8 @@ const useFile = input => {
   img.onerror = () => { photoData.value = ''; photoMsg.textContent = 'Foto lista para guardar: ' + file.name; photoMsg.classList.remove('d-none'); };
   img.src = url;
 };
+// Ojo: no usar onclick="document..." dentro del formulario: el campo name="document" (cédula) tapa a document
+document.getElementById('uploadBtn').onclick = () => photo.click();
 photo.onchange = () => useFile(photo);
 photoCam.onchange = () => useFile(photoCam);
 document.getElementById('camBtn').onclick = async () => {
