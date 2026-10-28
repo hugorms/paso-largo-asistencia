@@ -35,11 +35,14 @@
         {% if e.photo or e.face_at %}<img id="preview" src="/empleados/{{ e.id }}/rostro" alt="" data-photo="/empleados/{{ e.id }}/rostro" data-label="Foto registrada" data-caption="{{ e.name }}" onerror="this.classList.add('d-none')">{% else %}<img id="preview" class="d-none" alt=""><div id="ph" class="text-center"><i class="bi bi-person-bounding-box fs-1 d-block"></i><span class="small">Sin foto</span></div>{% endif %}
         <video id="cam" class="d-none" autoplay playsinline></video>
       </div>
-      <input type="file" name="photo" id="photo" accept="image/jpeg,image/png" class="d-none">
+      <input type="file" name="photo" id="photo" accept="image/*" class="d-none">
+      <input type="file" name="photo_cam" id="photoCam" accept="image/*" capture="user" class="d-none">
+      <input type="hidden" name="photo_data" id="photoData">
       <div class="d-flex flex-wrap gap-2">
         <button type="button" class="btn btn-outline-secondary flex-fill" onclick="document.getElementById('photo').click()"><i class="bi bi-image"></i> Subir foto</button>
         <button type="button" class="btn btn-outline-secondary flex-fill" id="camBtn"><i class="bi bi-camera"></i> Cámara</button>
       </div>
+      <div class="small text-success mt-2 d-none" id="photoMsg"></div>
       <button type="button" class="btn btn-primary w-100 mt-2 d-none" id="shotBtn"><i class="bi bi-camera-fill"></i> Tomar foto</button>
       <p class="form-text mt-2 mb-0">De frente, bien iluminado, sin lentes oscuros ni gorra y con fondo claro. Se ajusta sola al tamaño que acepta el equipo.</p>
     </div></div>
@@ -53,23 +56,41 @@
 {% endblock %}
 {% block scripts %}
 <script>
-const photo = document.getElementById('photo'), preview = document.getElementById('preview'), cam = document.getElementById('cam'), ph = document.getElementById('ph');
+const photo = document.getElementById('photo'), photoCam = document.getElementById('photoCam'), photoData = document.getElementById('photoData');
+const preview = document.getElementById('preview'), cam = document.getElementById('cam'), ph = document.getElementById('ph'), shotBtn = document.getElementById('shotBtn');
 const show = el => { [preview, cam].forEach(x => x.classList.add('d-none')); if (ph) ph.classList.add('d-none'); el.classList.remove('d-none'); };
-photo.onchange = () => { if (photo.files[0]) { preview.src = URL.createObjectURL(photo.files[0]); show(preview); } };
+const toJpeg = (src, w, h) => {
+  const k = Math.min(1, 800 / Math.max(w, h)), c = document.createElement('canvas');
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
+};
+const photoMsg = document.getElementById('photoMsg');
+const setPhoto = url => { photoData.value = url; preview.src = url; show(preview); photoMsg.classList.add('d-none'); };
+// Achica la foto en el teléfono antes de enviarla (las del celular pesan varios MB).
+// Si el navegador no puede leerla (p. ej. HEIC), se envía el archivo tal cual y la arregla el servidor.
+const useFile = input => {
+  const file = input.files[0]; if (!file) return;
+  [photo, photoCam].forEach(x => { if (x !== input) x.value = ''; });
+  const img = new Image(), url = URL.createObjectURL(file);
+  img.onload = () => { setPhoto(toJpeg(img, img.naturalWidth, img.naturalHeight)); input.value = ''; URL.revokeObjectURL(url); };
+  img.onerror = () => { photoData.value = ''; photoMsg.textContent = 'Foto lista para guardar: ' + file.name; photoMsg.classList.remove('d-none'); };
+  img.src = url;
+};
+photo.onchange = () => useFile(photo);
+photoCam.onchange = () => useFile(photoCam);
 document.getElementById('camBtn').onclick = async () => {
+  // En el teléfono, o si la página no es https (el navegador bloquea la cámara en vivo), se usa la cámara del propio teléfono
+  const live = window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !matchMedia('(pointer: coarse)').matches;
+  if (!live) { photoCam.click(); return; }
   try {
     cam.srcObject = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user', width:640, height:480}});
-    show(cam); document.getElementById('shotBtn').classList.remove('d-none');
-  } catch (e) { alert('No se pudo abrir la cámara: ' + e.message); }
+    show(cam); shotBtn.classList.remove('d-none');
+  } catch (e) { photoCam.click(); }
 };
-document.getElementById('shotBtn').onclick = () => {
-  const c = document.createElement('canvas'); c.width = cam.videoWidth; c.height = cam.videoHeight;
-  c.getContext('2d').drawImage(cam, 0, 0);
-  c.toBlob(b => {
-    const dt = new DataTransfer(); dt.items.add(new File([b], 'camara.jpg', {type:'image/jpeg'})); photo.files = dt.files;
-    preview.src = URL.createObjectURL(b); show(preview);
-    cam.srcObject.getTracks().forEach(t => t.stop()); document.getElementById('shotBtn').classList.add('d-none');
-  }, 'image/jpeg', 0.9);
+shotBtn.onclick = () => {
+  setPhoto(toJpeg(cam, cam.videoWidth, cam.videoHeight)); photo.value = ''; photoCam.value = '';
+  cam.srcObject.getTracks().forEach(t => t.stop()); shotBtn.classList.add('d-none');
 };
 </script>
 {% endblock %}
