@@ -10,11 +10,11 @@
     {% if not s.id %}<div class="fw-semibold small text-uppercase text-secondary mb-2">Nuevo horario{% if not local_now %} en {{ local_names.get(new_local, '') }}{% endif %}</div>
     {% elif not local_now %}<div class="small text-secondary mb-1"><i class="bi bi-shop"></i> {{ local_names.get(s.local_id, 'Sin local') }}</div>{% endif %}
     <div class="row g-2 align-items-end">
-      <div class="col-md-3"><label class="form-label">Nombre</label><input name="name" value="{{ s.name or '' }}" class="form-control" required placeholder="Ej.: Turno mañana"></div>
-      <div class="col-6 col-md-2"><label class="form-label">Entrada</label><input type="time" name="start_time" value="{{ s.start_time or '08:00' }}" class="form-control" required></div>
-      <div class="col-6 col-md-2"><label class="form-label">Salida</label><input type="time" name="end_time" value="{{ s.end_time or '17:00' }}" class="form-control" required></div>
-      <div class="col-6 col-md-2 ms-md-auto"><label class="form-label">Tolerancia (min)</label><input type="number" min="0" name="tolerance_min" value="{{ s.tolerance_min if s.id else 10 }}" class="form-control"></div>
-      <div class="col-6 col-md-2"><label class="form-label">Refrigerio (min)</label><input type="number" min="0" name="lunch_min" value="{{ s.lunch_min if s.id else 60 }}" class="form-control"></div>
+      <div class="col-md-4"><label class="form-label">Nombre</label><input name="name" value="{{ s.name or '' }}" class="form-control" required placeholder="Ej.: Turno mañana"></div>
+      <div class="col-6 col-md-4"><label class="form-label">Entrada</label><input type="time" name="start_time" value="{{ s.start_time or '08:00' }}" class="form-control" required></div>
+      <div class="col-6 col-md-4"><label class="form-label">Salida</label><input type="time" name="end_time" value="{{ s.end_time or '17:00' }}" class="form-control" required></div>
+      <div class="col-6 col-md-3"><label class="form-label">Tolerancia (min)</label><input type="number" min="0" name="tolerance_min" value="{{ s.tolerance_min if s.id else 10 }}" class="form-control"></div>
+      <div class="col-6 col-md-3"><label class="form-label">Refrigerio (min)</label><input type="number" min="0" name="lunch_min" value="{{ s.lunch_min if s.id else 60 }}" class="form-control"></div>
     </div>
     <div class="row g-2 align-items-end mt-1">
       <div class="col-md-6"><label class="form-label">Ventana de entrada</label><div class="input-group">
@@ -25,7 +25,7 @@
         <input type="time" name="out_to" value="{{ s.out_to or ('' if s.id else '20:00') }}" class="form-control"></div></div>
     </div>
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2">
-      <div class="day-pills d-flex flex-wrap gap-1">{% set sd = (s.days or '1,2,3,4,5').split(',') %}
+      <div class="day-pills d-flex flex-wrap gap-1">{% set sd = (s.days or ('' if s.id else '1,2,3,4,5')).split(',') %}
         {% for i in range(1,8) %}<label><input type="checkbox" name="days" value="{{ i }}" {{ 'checked' if i|string in sd }}><span>{{ days[i] }}</span></label>{% endfor %}</div>
       <div class="d-flex gap-2">
         {% if s.id %}<button class="btn btn-sm btn-outline-danger" formaction="/configuracion/horario-eliminar" onclick="return confirm('¿Eliminar este horario?')"><i class="bi bi-trash"></i></button>{% endif %}

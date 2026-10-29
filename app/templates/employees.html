@@ -33,7 +33,7 @@
     <td><div class="d-flex flex-wrap gap-1">
       {% if not e.active %}<span class="badge text-bg-secondary">Inactivo</span>{% endif %}
       {% if e.sync_err %}<span class="badge text-bg-danger">Error en {{ e.sync_err }} equipo{{ 's' if e.sync_err > 1 }}</span>{% elif e.sync_ok %}<span class="badge text-bg-success">En equipo</span>{% endif %}
-      {% if not e.face_at %}<span class="badge text-bg-warning" title="No cuenta asistencia hasta registrar su rostro aquí o en el equipo">Sin rostro</span>{% elif not e.photo %}<span class="badge text-bg-light">Rostro en equipo</span>{% endif %}
+      {% if not e.face_at and not e.photo %}<span class="badge text-bg-warning" title="Sin rostro registrado: no acumula faltas hasta registrar su rostro aquí o en el equipo, o hasta su primera marca">Sin rostro</span>{% elif not e.photo %}<span class="badge text-bg-light">Rostro en equipo</span>{% endif %}
     </div></td>
     <td class="text-end text-nowrap">
       <a href="/reportes?emp={{ e.id }}&vista=detalle" class="btn btn-sm btn-outline-secondary btn-icon" title="Ver asistencia"><i class="bi bi-calendar3"></i></a>

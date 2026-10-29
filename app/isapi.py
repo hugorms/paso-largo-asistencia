@@ -41,6 +41,10 @@ class ISAPIClient:
         try:
             with httpx.Client(auth=self.auth, timeout=self.timeout, verify=self.verify) as c:
                 r = c.request(method, self.base + path, **kw)
+        except httpx.TimeoutException as e:
+            raise ISAPIConnError("El equipo no respondió a tiempo (¿apagado o fuera de la red?)") from e
+        except httpx.ConnectError as e:
+            raise ISAPIConnError("No se pudo conectar con el equipo (¿apagado, desconectado o IP equivocada?)") from e
         except httpx.HTTPError as e:
             raise ISAPIConnError(f"No se pudo conectar con el equipo: {e}") from e
         if r.status_code == 401:

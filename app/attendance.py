@@ -71,7 +71,7 @@ def pick_marks(ms, e, d: date, now: datetime, min_gap: timedelta):
     outs = [t for t, k, _ in ms if k in ("out", "any")]
     entry = min(ins) if ins else None
     exit_ = max(outs) if outs else None
-    if entry and exit_ and exit_ - entry < min_gap:
+    if entry and exit_ and (exit_ == entry or exit_ - entry < min_gap):
         # En realidad es una sola marca (o dos seguidas): las ventanas dicen si fue entrada o salida
         forced = {k for t, k, _ in ms if entry <= t <= exit_} - {"any"}
         kind = forced.pop() if len(forced) == 1 else side(entry, e)
@@ -84,6 +84,11 @@ def pick_marks(ms, e, d: date, now: datetime, min_gap: timedelta):
     # Hoy, antes de la hora de salida, una marca del medio (p. ej. a las 12:00) aún no es la salida
     if (exit_ and d == now.date() and e.get("end_time") and now < _t(d, e["end_time"]) and e.get("out_from")
             and not in_window(exit_, e["out_from"], e["out_to"])
+            and not any(t == exit_ and (man or k == "out") for t, k, man in ms)):
+        exit_ = None
+    # Una marca repetida dentro de la ventana de entrada (p. ej. 08:00 y 08:03) no es la salida, cualquier día
+    if (exit_ and entry and e.get("in_from") and in_window(exit_, e["in_from"], e["in_to"])
+            and not in_window(exit_, e.get("out_from"), e.get("out_to"))
             and not any(t == exit_ and (man or k == "out") for t, k, man in ms)):
         exit_ = None
     used = {entry, exit_}
@@ -102,7 +107,8 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
     end = min(end, now.date())
     if end < start:
         return []
-    where, args = ["e.active=1"], []
+    # los dados de baja siguen contando en los días antes de su baja (deactivated_at)
+    where, args = ["(e.active=1 OR e.deactivated_at > ?)"], [start.isoformat()]
     if employee_id:
         where, args = ["e.id=?"], [employee_id]
     if department_id:
@@ -182,6 +188,8 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
         for d in _daterange(start, end):
             if hire and d < hire:
                 continue
+            if not e["active"] and e["deactivated_at"] and d.isoformat() >= e["deactivated_at"]:
+                break  # desde el día de la baja ya no cuenta
             ms = marks.get((e["employee_no"], d), [])
             entry, exit_, outside = pick_marks(ms, e, d, now, min_gap)
             row = {"employee_id": e["id"], "employee_no": e["employee_no"], "name": e["name"],
@@ -203,8 +211,10 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
 
             if d.isoformat() in holidays:
                 row["status"], row["note"] = "Feriado", holidays[d.isoformat()]
-            elif leave and not ms and is_workday:
+            elif leave and is_workday and not (entry and exit_):
                 row["status"], row["note"] = "Justificado", leave["kind"] + (f": {leave['notes']}" if leave["notes"] else "")
+                if ms:
+                    row["note"] += f" · marcó {len(ms)} vez" + ("es" if len(ms) > 1 else "")
             elif not is_workday:
                 if not ms:
                     continue  # días libres sin marcas no se listan
@@ -224,7 +234,8 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
                 if exit_:
                     row["overtime_min"] = max(0, int((exit_ - e_dt).total_seconds() // 60))
                 row["status"] = "Tarde" if row["late_min"] else "Puntual"
-                if not exit_ and (d < now.date() or now > e_dt):
+                closes = max(e_dt, _t(d, e["out_to"])) if e.get("out_to") else e_dt
+                if not exit_ and (d < now.date() or now > closes):
                     row["note"] = "Sin marca de salida"
                 elif not entry:
                     row["note"] = "Sin marca de entrada"

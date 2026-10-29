@@ -330,3 +330,6 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
 .user-locales .all-locales { display: none; }
 .user-locales.is-admin .form-check { display: none; }
 .user-locales.is-admin .all-locales { display: block; }
+
+/* En el teléfono las tablas largas no van en cajas con scroll interno (se cortaban sin aviso) */
+@media (max-width: 767.98px) { .table-responsive[style*="max-height"] { max-height: none !important; } }

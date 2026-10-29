@@ -211,7 +211,7 @@
 <div class="row g-3 mb-4">
   {% for label, value, color, icon, extra in tiles %}
   <div class="col-6 col-md-4 col-xl-2 stat-col"><div class="card stat rs-total"><div class="d-flex justify-content-between align-items-start gap-2">
-    <div class="min-w-0"><div class="label">{{ label }}</div><div class="value mono{{ ' long' if (value|string)|length > 6 and not loop.first }}">{{ value|safe if loop.first and r.vista == 'hoy' else value }}</div>{{ extra }}</div>
+    <div class="min-w-0"><div class="label">{{ label }}</div><div class="value mono{{ ' long' if (value|string)|length >= 6 and not loop.first }}">{{ value|safe if loop.first and r.vista == 'hoy' else value }}</div>{{ extra }}</div>
     <div class="ico ico-{{ color }}"><i class="bi bi-{{ icon }}"></i></div></div></div></div>
   {% endfor %}
 </div>
@@ -219,7 +219,7 @@
 {% endif %}
 
 {% if not cards %}
-<div class="card"><div class="empty"><i class="bi bi-shop"></i>No hay locales activos. Créalos en <a href="/configuracion">Horarios y ajustes</a>.</div></div>
+<div class="card"><div class="empty"><i class="bi bi-shop"></i>No hay locales activos. Créalos en <a href="/locales">Locales</a>.</div></div>
 {% endif %}
 
 {# ---------------- HOY ---------------- #}
