@@ -95,7 +95,8 @@ def pick_marks(ms, e, d: date, now: datetime, min_gap: timedelta):
 
 def compute(start: date, end: date, employee_id=None, department_id=None, now=None, locales=None):
     """Devuelve una fila por empleado y día con entrada, salida, tardanza, horas y estado.
-    locales: lista de id de locales de los empleados a incluir (None = todos, también los sin local).
+    locales: lista de id de locales de los empleados a incluir (None = todos; un None dentro de la lista = también
+    los que aún no tienen local).
     Las marcas de un empleado cuentan aunque las haya hecho en el equipo de otro local."""
     now = now or datetime.now()
     end = min(end, now.date())
@@ -108,10 +109,14 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
         where.append("e.department_id=?")
         args.append(department_id)
     if locales is not None:
-        if not locales:
+        ids = [x for x in locales if x is not None]
+        if not ids and None not in locales:
             return []
-        where.append(f"e.local_id IN ({','.join('?' * len(locales))})")
-        args += list(locales)
+        cond = [f"e.local_id IN ({','.join('?' * len(ids))})"] if ids else []
+        if None in locales:  # None en la lista = también los empleados que aún no tienen local
+            cond.append("e.local_id IS NULL")
+        where.append("(" + " OR ".join(cond) + ")")
+        args += ids
     emps = db.q(f"""SELECT e.*, d.name AS department, l.name AS home_sede, s.name AS schedule_name, s.start_time, s.end_time,
                     s.tolerance_min, s.lunch_min, s.days, s.in_from, s.in_to, s.out_from, s.out_to
                     FROM employees e LEFT JOIN departments d ON d.id=e.department_id
@@ -198,7 +203,7 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
 
             if d.isoformat() in holidays:
                 row["status"], row["note"] = "Feriado", holidays[d.isoformat()]
-            elif leave and not ms:
+            elif leave and not ms and is_workday:
                 row["status"], row["note"] = "Justificado", leave["kind"] + (f": {leave['notes']}" if leave["notes"] else "")
             elif not is_workday:
                 if not ms:
@@ -264,7 +269,7 @@ def summarize(rows):
             s["absences"] += 1
         if r["status"] == "Justificado":
             s["justified"] += 1
-        if r["note"].startswith("Sin marca de salida"):
+        if "Sin marca de salida" in r["note"]:
             s["missing_exit"] += 1
         s["worked_min"] += r["worked_min"]
         s["overtime_min"] += r["overtime_min"]

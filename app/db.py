@@ -163,6 +163,8 @@ def merge_device(c, keep, dup):
     k = c.execute("SELECT * FROM devices WHERE id=?", (keep,)).fetchone()
     if not d or not k:
         return
+    if d["local_id"] is not None and k["local_id"] is not None and d["local_id"] != k["local_id"]:
+        return  # registrados en locales distintos: lo decide el admin, no se mezclan historiales
     c.execute("UPDATE OR IGNORE events SET device_id=? WHERE device_id=?", (keep, dup))
     c.execute("DELETE FROM events WHERE device_id=?", (dup,))
     c.execute("UPDATE OR IGNORE employee_sync SET device_id=? WHERE device_id=?", (keep, dup))

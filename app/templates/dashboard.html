@@ -99,7 +99,7 @@ function paint(d, animate){
   const shot = d.events.find(ev => ev.picture_url && ev.employee_no);
   if (shot && shot.id !== lastShot) {
     lastShot = shot.id;
-    document.getElementById('lastShot').innerHTML = `<img src="/eventos/${shot.id}/foto" alt="" ${photoAttrs(shot)}>`;
+    document.getElementById('lastShot').innerHTML = `<img src="/eventos/${shot.id}/foto" alt="" ${photoAttrs(shot)} onerror="this.outerHTML='<div class=\\'text-center\\'><i class=\\'bi bi-image fs-1 d-block\\'></i><span class=\\'small\\'>No se pudo traer la foto del equipo</span></div>'">`;
     document.getElementById('lastShotCap').innerHTML = `<span class="fw-medium">${esc(shot.emp_name || shot.name || '—')}</span> <span class="mono text-secondary">${shot.event_time.slice(11,19)} · ${esc(shot.device||'')}</span>`;
   }
   document.getElementById('late').innerHTML = d.late_list.map(l => `<li class="list-group-item d-flex justify-content-between"><span>${esc(l.name)}</span><span class="mono">${l.entry} <span class="badge text-bg-warning ms-1">+${l.late} min</span></span></li>`).join('') || empty('emoji-smile','Nadie llegó tarde');

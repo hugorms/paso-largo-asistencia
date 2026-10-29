@@ -231,9 +231,9 @@ def build(vista: str = "hoy", now: datetime | None = None) -> dict:
         for l, k in zip(locs, keys):
             data["cards"].append({**l, **counts(groups.get(k, [])), "devices": devs.get(k, {"online": 0, "total": 0}),
                                   "away": away.get(k, {"out": [], "in": []})})
-        data["total"]["devices"] = {"online": sum(d["online"] for d in devs.values()),
-                                    "total": sum(d["total"] for d in devs.values())}
-        data["total"]["away"] = sum(len(a["out"]) for a in away.values())
+        data["total"]["devices"] = {"online": sum(devs[k]["online"] for k in keys if k in devs),
+                                    "total": sum(devs[k]["total"] for k in keys if k in devs)}
+        data["total"]["away"] = sum(len(away[k]["out"]) for k in keys if k in away)
     elif vista == "semana":
         days = week_days(start)
         photos = {r["id"]: r["photo"] for r in db.q("SELECT id, photo FROM employees WHERE photo IS NOT NULL")}
