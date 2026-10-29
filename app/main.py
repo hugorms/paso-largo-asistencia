@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from openpyxl import load_workbook
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import attendance, db, devices, reports, seguridad
+from . import alcance, attendance, db, devices, reports, seguridad
 from .isapi import MINOR_FAIL, MINOR_NAMES, ISAPIError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -39,7 +39,7 @@ templates.env.globals["version"] = _version_file.read_text().strip() if _version
 
 DEFAULT_PASSWORD = "admin123"
 MIN_PASSWORD = 8
-ROLES = {"admin": "Administrador", "supervisor": "Supervisor", "consulta": "Consulta"}
+ROLES = alcance.ROLES
 LEAVE_KINDS = ["Vacaciones", "Permiso médico", "Permiso personal", "Licencia", "Comisión de servicio", "Otro"]
 poller = devices.Poller()
 
@@ -85,7 +85,8 @@ def render(request, name, u, **ctx):
     msgs = request.session.pop("flash", [])
     return templates.TemplateResponse(request, name, {
         "u": u, "flashes": msgs, "roles": ROLES, "company": db.get_setting("company", ""),
-        "path": request.url.path, **ctx})
+        "path": request.url.path, "local_choices": alcance.choices(u), "local_now": alcance.current(request, u),
+        **ctx})
 
 
 def back(url):
@@ -138,6 +139,14 @@ async def login(request: Request):
 def logout(request: Request):
     request.session.clear()
     return back("/login")
+
+
+@app.post("/local")
+async def local_choose(request: Request):
+    """Selector del menú: qué local se está viendo (vacío = todos los permitidos)."""
+    u, f = user(request), await form(request)
+    alcance.choose(request, u, f.get("local"))
+    return back(seguridad.safe_back(request.headers.get("referer"), "/"))
 
 
 @app.get("/cuenta", response_class=HTMLResponse)
@@ -281,7 +290,7 @@ def employees(request: Request, q: str = "", dep: str = "", inactivos: str = "")
 
 @app.get("/empleados/nuevo", response_class=HTMLResponse)
 def employee_new(request: Request):
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     nxt = db.q1("SELECT MAX(CAST(employee_no AS INTEGER)) m FROM employees")["m"] or 0
     return render(request, "employee_form.html", u, e={"employee_no": str(nxt + 1), "active": 1}, sync=[],
                   **emp_lookups())
@@ -289,7 +298,7 @@ def employee_new(request: Request):
 
 @app.get("/empleados/{eid}", response_class=HTMLResponse)
 def employee_edit(request: Request, eid: int):
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     e = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
     if not e:
         raise Redirect("/empleados")
@@ -300,7 +309,7 @@ def employee_edit(request: Request, eid: int):
 
 @app.post("/empleados/guardar")
 async def employee_save(request: Request):
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     raw = await request.form(max_part_size=8 * 1024 * 1024)  # photo_data (foto en texto) puede pasar de 1 MB
     f = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw.items()}
     eid = int(f["id"]) if f.get("id") else None
@@ -379,7 +388,7 @@ def _flash_results(request, msg, res):
 
 @app.post("/empleados/{eid}/sincronizar")
 async def employee_sync(request: Request, eid: int):
-    user(request, "admin", "supervisor")
+    user(request, "admin", "encargado")
     emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
     _flash_results(request, "", await run_in_threadpool(devices.push_employee, emp))
     return back(f"/empleados/{eid}")
@@ -534,7 +543,7 @@ async def employee_face(request: Request, eid: int):
 # ------------------------------------------------------------------ departamentos / horarios / feriados
 @app.get("/configuracion", response_class=HTMLResponse)
 def config(request: Request):
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     return render(request, "config.html", u, departments=db.q("SELECT * FROM departments ORDER BY name"),
                   sedes=sedes(),
                   schedules=db.q("SELECT * FROM schedules ORDER BY name"),
@@ -544,7 +553,7 @@ def config(request: Request):
 
 @app.post("/configuracion/{what}")
 async def config_save(request: Request, what: str):
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     f = await form(request)
     if what == "departamento" and f.get("name"):
         db.ex("INSERT OR IGNORE INTO departments(name, sede) VALUES (?,?)", (f["name"], f.get("sede") or None))
@@ -643,7 +652,7 @@ async def backup_restore(request: Request):
 # ------------------------------------------------------------------ permisos / justificaciones
 @app.get("/permisos", response_class=HTMLResponse)
 def leaves(request: Request):
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     rows = db.q("""SELECT l.*, e.name, e.employee_no FROM leaves l JOIN employees e ON e.id=l.employee_id
                    ORDER BY l.date_from DESC LIMIT 300""")
     return render(request, "leaves.html", u, rows=rows, kinds=LEAVE_KINDS,
@@ -652,7 +661,7 @@ def leaves(request: Request):
 
 @app.post("/permisos")
 async def leave_save(request: Request):
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     f = await form(request)
     if f.get("delete"):
         db.ex("DELETE FROM leaves WHERE id=?", (f["delete"],))
@@ -681,7 +690,7 @@ def attendance_day(request: Request, fecha: str = "", dep: str = ""):
 
 @app.post("/asistencia/manual")
 async def manual_mark(request: Request):
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     f = await form(request)
     emp = db.q1("SELECT * FROM employees WHERE id=?", (f.get("employee_id"),))
     if emp and f.get("date") and f.get("time"):
@@ -726,7 +735,7 @@ def events(request: Request, desde: str = "", hasta: str = "", emp: str = "", de
 @app.post("/eventos/{evid}/eliminar")
 async def event_delete(request: Request, evid: int):
     """Solo se pueden borrar las marcas manuales; las del equipo son el registro original."""
-    u = user(request, "admin", "supervisor")
+    u = user(request, "admin", "encargado")
     ev = db.q1("SELECT * FROM events WHERE id=? AND source='manual'", (evid,))
     if ev:
         db.ex("DELETE FROM events WHERE id=?", (evid,))

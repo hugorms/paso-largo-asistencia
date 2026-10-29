@@ -10,7 +10,7 @@
     </div>
     <input type="date" name="fecha" value="{{ d }}" class="form-control w-auto" onchange="this.form.submit()">
     <select name="dep" class="form-select w-auto" onchange="this.form.submit()"><option value="">Todos los departamentos</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if dep|string == dp.id|string }}>{{ dp.name }}</option>{% endfor %}</select>
-    {% if u.role in ['admin','supervisor'] %}<button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#manual"><i class="bi bi-plus-lg"></i> Marca manual</button>{% endif %}
+    {% if u.role in ['admin','encargado'] %}<button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#manual"><i class="bi bi-plus-lg"></i> Marca manual</button>{% endif %}
   </form>
 </div>
 <div class="card"><div class="table-responsive table-wrap"><table class="table table-hover align-middle">

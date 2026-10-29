@@ -20,10 +20,21 @@
     {% set sections = [
       ('Diario', [('/', 'speedometer2', 'Panel', None), ('/asistencia', 'calendar-check', 'Asistencia del día', None),
                   ('/eventos', 'list-ul', 'Marcaciones', None), ('/reportes', 'file-earmark-bar-graph', 'Reportes', None)]),
-      ('Personal', [('/empleados', 'people', 'Empleados', None), ('/permisos', 'clipboard-check', 'Permisos', ['admin','supervisor'])]),
-      ('Sistema', [('/dispositivos', 'cpu', 'Dispositivos', None), ('/configuracion', 'sliders', 'Horarios y ajustes', ['admin','supervisor']),
+      ('Personal', [('/empleados', 'people', 'Empleados', None), ('/permisos', 'clipboard-check', 'Permisos', ['admin','encargado'])]),
+      ('Sistema', [('/dispositivos', 'cpu', 'Dispositivos', None), ('/configuracion', 'sliders', 'Horarios y ajustes', ['admin','encargado']),
                    ('/usuarios', 'shield-lock', 'Usuarios', ['admin'])]),
     ] %}
+    {% if local_choices|length > 1 %}
+    <form method="post" action="/local" class="local-pick px-3 mb-2">
+      <label class="nav-section d-block mb-1" for="localPick">Local</label>
+      <select id="localPick" name="local" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="">Todos mis locales</option>
+        {% for l in local_choices %}<option value="{{ l.id }}" {{ 'selected' if local_now and local_now.id == l.id }}>{{ l.name }}</option>{% endfor %}
+      </select>
+    </form>
+    {% elif local_now %}
+    <div class="px-3 mb-2 small text-muted"><i class="bi bi-geo-alt"></i> {{ local_now.name }}</div>
+    {% endif %}
     <div class="side-nav">
     {% for title, items in sections %}
       <div class="nav-section">{{ title }}</div>

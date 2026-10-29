@@ -7,7 +7,7 @@
     <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#imp"><i class="bi bi-upload"></i> Importar</button>
     <form method="post" action="/empleados/sincronizar-todos" onsubmit="return confirm('¿Enviar todos los empleados activos y sus rostros a todos los equipos?')"><button class="btn btn-outline-secondary"><i class="bi bi-arrow-repeat"></i> Sincronizar todos</button></form>
   {% endif %}
-  {% if u.role in ['admin','supervisor'] %}<a href="/empleados/nuevo" class="btn btn-primary"><i class="bi bi-person-plus"></i> Nuevo empleado</a>{% endif %}
+  {% if u.role in ['admin','encargado'] %}<a href="/empleados/nuevo" class="btn btn-primary"><i class="bi bi-person-plus"></i> Nuevo empleado</a>{% endif %}
   </div>
 </div>
 <div class="card">
@@ -36,7 +36,7 @@
     </div></td>
     <td class="text-end text-nowrap">
       <a href="/reportes?emp={{ e.id }}&vista=detalle" class="btn btn-sm btn-outline-secondary btn-icon" title="Ver asistencia"><i class="bi bi-calendar3"></i></a>
-      {% if u.role in ['admin','supervisor'] %}<a href="/empleados/{{ e.id }}" class="btn btn-sm btn-outline-primary btn-icon" title="Editar"><i class="bi bi-pencil"></i></a>{% endif %}
+      {% if u.role in ['admin','encargado'] %}<a href="/empleados/{{ e.id }}" class="btn btn-sm btn-outline-primary btn-icon" title="Editar"><i class="bi bi-pencil"></i></a>{% endif %}
     </td>
   </tr>
   {% else %}<tr><td colspan="8" class="empty"><i class="bi bi-people"></i>No hay empleados. Crea uno o impórtalos desde el equipo o un Excel.</td></tr>{% endfor %}
