@@ -163,7 +163,8 @@ def merge_device(c, keep, dup):
     k = c.execute("SELECT * FROM devices WHERE id=?", (keep,)).fetchone()
     if not d or not k:
         return
-    if d["local_id"] is not None and k["local_id"] is not None and d["local_id"] != k["local_id"]:
+    has_local = "local_id" in d.keys()  # en una base vieja (antes de locales) la columna aún no existe
+    if has_local and d["local_id"] is not None and k["local_id"] is not None and d["local_id"] != k["local_id"]:
         return  # registrados en locales distintos: lo decide el admin, no se mezclan historiales
     c.execute("UPDATE OR IGNORE events SET device_id=? WHERE device_id=?", (keep, dup))
     c.execute("DELETE FROM events WHERE device_id=?", (dup,))
@@ -174,6 +175,8 @@ def merge_device(c, keep, dup):
                  last_event_time=NULLIF(MAX(COALESCE(last_event_time,''), ?),'') WHERE id=?""",
               (d["active"], d["serial"], d["mac"], d["model"], d["firmware"], d["last_event_time"] or "", keep))
     c.execute("DELETE FROM devices WHERE id=?", (dup,))
+    if has_local:  # si el que queda no tenía local, toma el del otro registro
+        c.execute("UPDATE devices SET local_id=COALESCE(local_id, ?) WHERE id=?", (d["local_id"], keep))
     if (d["last_seen"] or "") > (k["last_seen"] or ""):
         c.execute("""UPDATE devices SET host=?, port=?, https=?, username=?, password=?, online=?, last_seen=?,
                      last_error=? WHERE id=?""", (d["host"], d["port"], d["https"], d["username"], d["password"],

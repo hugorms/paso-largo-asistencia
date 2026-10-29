@@ -42,7 +42,10 @@ def refresh_info(dev):
         info = client(dev).device_info()
         mine = db.q1("SELECT local_id FROM devices WHERE id=?", (dev["id"],))
         if info.get("serialNumber") and mine and mine["local_id"] is not None and db.q1(
-                "SELECT 1 FROM devices WHERE serial=? AND id<>? AND local_id IS NOT NULL AND local_id<>?",
+                # solo cuenta el registro del otro local que se está leyendo: uno desactivado o pausado no bloquea
+                # (si no, dos registros del mismo aparato se pausarían el uno al otro y nadie lo leería)
+                "SELECT 1 FROM devices WHERE serial=? AND id<>? AND local_id IS NOT NULL AND local_id<>? "
+                "AND active=1 AND COALESCE(paused_other, 0)=0",
                 (info["serialNumber"], dev["id"], mine["local_id"])):
             # Es el mismo aparato que otro local ya tiene registrado (con otra IP o nombre): no se une ni se lee
             # (si no, sus marcas se copiarían a este local). Queda pausado hasta que el admin lo revise.
