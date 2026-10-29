@@ -42,7 +42,7 @@ def side(t: datetime, e) -> str:
 
 
 def away_from(home, sede) -> bool:
-    """¿El local del equipo es distinto al del departamento? (sin distinguir mayúsculas ni espacios)"""
+    """¿Son dos nombres de local distintos? (sin distinguir mayúsculas ni espacios)"""
     norm = lambda x: " ".join((x or "").lower().split())
     return bool(norm(home)) and bool(norm(sede)) and norm(home) != norm(sede)
 
@@ -93,8 +93,10 @@ def pick_marks(ms, e, d: date, now: datetime, min_gap: timedelta):
     return entry, exit_, outside
 
 
-def compute(start: date, end: date, employee_id=None, department_id=None, now=None):
-    """Devuelve una fila por empleado y día con entrada, salida, tardanza, horas y estado."""
+def compute(start: date, end: date, employee_id=None, department_id=None, now=None, locales=None):
+    """Devuelve una fila por empleado y día con entrada, salida, tardanza, horas y estado.
+    locales: lista de id de locales de los empleados a incluir (None = todos, también los sin local).
+    Las marcas de un empleado cuentan aunque las haya hecho en el equipo de otro local."""
     now = now or datetime.now()
     end = min(end, now.date())
     if end < start:
@@ -105,18 +107,25 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
     if department_id:
         where.append("e.department_id=?")
         args.append(department_id)
-    emps = db.q(f"""SELECT e.*, d.name AS department, d.sede AS home_sede, s.name AS schedule_name, s.start_time, s.end_time,
+    if locales is not None:
+        if not locales:
+            return []
+        where.append(f"e.local_id IN ({','.join('?' * len(locales))})")
+        args += list(locales)
+    emps = db.q(f"""SELECT e.*, d.name AS department, l.name AS home_sede, s.name AS schedule_name, s.start_time, s.end_time,
                     s.tolerance_min, s.lunch_min, s.days, s.in_from, s.in_to, s.out_from, s.out_to
                     FROM employees e LEFT JOIN departments d ON d.id=e.department_id
-                    LEFT JOIN schedules s ON s.id=e.schedule_id
+                    LEFT JOIN schedules s ON s.id=e.schedule_id LEFT JOIN locales l ON l.id=e.local_id
                     WHERE {' AND '.join(where)} ORDER BY e.name""", args)
     if not emps:
         return []
 
     devices = {d["id"]: d["direction"] for d in db.q("SELECT id, direction FROM devices")}
-    sedes = {d["id"]: (d["sede"] or "").strip() for d in db.q("SELECT id, sede FROM devices")}
-    home = {e["employee_no"]: (e["home_sede"] or "").strip() for e in emps}
-    away = defaultdict(set)  # (n° empleado, día) -> locales distintos al de su departamento donde marcó
+    # Local de cada equipo (id y nombre) y local de cada empleado
+    sedes = {d["id"]: (d["local_id"], d["name"]) for d in db.q(
+        "SELECT dv.id, dv.local_id, l.name FROM devices dv JOIN locales l ON l.id=dv.local_id")}
+    home = {e["employee_no"]: e["local_id"] for e in emps}
+    away = defaultdict(set)  # (n° empleado, día) -> locales distintos al suyo donde marcó
     trail = defaultdict(list)  # (n° empleado, día) -> [(hora, local)] de cada marca en un equipo con local
     # El tipo Entrada/Salida que manda el terminal solo se respeta si ese equipo alguna vez mandó una
     # "Salida": hay equipos que ponen "Entrada" a todas las marcas y entonces nadie tendría salida.
@@ -140,10 +149,10 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
         else:
             kind = {"entrada": "in", "salida": "out"}.get(devices.get(ev["device_id"]), "any")
         marks[(ev["employee_no"], t.date())].append((t, kind, manual))
-        sede = sedes.get(ev["device_id"])
+        dev_local, sede = sedes.get(ev["device_id"], (None, None))
         if sede:
             trail[(ev["employee_no"], t.date())].append((t, sede))
-        if sede and home.get(ev["employee_no"]) and away_from(home[ev["employee_no"]], sede):
+        if dev_local and home.get(ev["employee_no"]) and home[ev["employee_no"]] != dev_local:
             away[(ev["employee_no"], t.date())].add(sede)
 
     holidays = {h["date"]: h["name"] for h in db.q("SELECT date, name FROM holidays WHERE date BETWEEN ? AND ?",
@@ -226,10 +235,11 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
     return rows
 
 
-def mark_roles(start: date, end: date):
-    """Qué marcas quedaron como entrada o salida de cada día: {(n° empleado, hora): 'Entrada'|'Salida'}."""
+def mark_roles(start: date, end: date, locales=None):
+    """Qué marcas quedaron como entrada o salida de cada día: {(n° empleado, hora): 'Entrada'|'Salida'}.
+    locales: solo empleados de esos locales (None = todos)."""
     roles = {}
-    for r in compute(start, end):
+    for r in compute(start, end, locales=locales):
         if r["entry"]:
             roles[(r["employee_no"], r["entry"])] = "Entrada"
         if r["exit"]:

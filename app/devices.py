@@ -268,6 +268,23 @@ def pull_events(dev, since: datetime | None = None, until: datetime | None = Non
     return new
 
 
+def local_schedule(local_id):
+    """Horario que se pone a un empleado creado solo (desde un equipo): el primero de su local, o ninguno."""
+    if local_id is None:
+        return None
+    r = db.q1("SELECT id FROM schedules WHERE local_id=? ORDER BY id", (local_id,))
+    return r["id"] if r else None
+
+
+def add_from_device(dev, no, name, gender="unknown", face_at=None):
+    """Da de alta a una persona que está en el equipo: queda en el local del equipo, con un horario de ese local.
+    Si el N° ya existe (en cualquier local) no hace nada: el N° es único en toda la empresa."""
+    return db.ex("""INSERT OR IGNORE INTO employees(employee_no, name, gender, schedule_id, face_at, local_id)
+                    VALUES (?,?,?,?,?,?)""",
+                 (no, name or f"Empleado {no}", gender or "unknown", local_schedule(dev["local_id"]), face_at,
+                  dev["local_id"]))
+
+
 def import_unknown_users(dev):
     """Crea en el sistema a las personas que marcan en el equipo pero aún no están registradas aquí."""
     missing = [r["employee_no"] for r in db.q(
@@ -275,12 +292,10 @@ def import_unknown_users(dev):
            AND employee_no NOT IN (SELECT employee_no FROM employees)""", (dev["id"],))]
     if not missing:
         return 0
-    sched = db.q1("SELECT id FROM schedules ORDER BY id")
     users = {u["employeeNo"]: u for u in client(dev).search_users()}
     for no in missing:
         u = users.get(no, {})
-        db.ex("INSERT OR IGNORE INTO employees(employee_no, name, gender, schedule_id) VALUES (?,?,?,?)",
-              (no, u.get("name") or f"Empleado {no}", u.get("gender", "unknown"), sched["id"] if sched else None))
+        add_from_device(dev, no, u.get("name"), u.get("gender", "unknown"))
     db.audit("sistema", "empleados importados del equipo", f"{dev['name']}: {', '.join(missing)}")
     return len(missing)
 
@@ -290,7 +305,6 @@ def sync_faces(dev):
     desde cuándo tiene rostro. Quien no tiene rostro no cuenta asistencia."""
     users = [u for u in client(dev).search_users() if int(u.get("numOfFace") or 0) > 0]
     today = datetime.now().date().isoformat()
-    sched = db.q1("SELECT id FROM schedules ORDER BY id")
     new = []
     for u in users:
         no = str(u.get("employeeNo") or "").strip()
@@ -299,9 +313,7 @@ def sync_faces(dev):
         if db.q1("SELECT 1 FROM employees WHERE employee_no=?", (no,)):
             db.ex("UPDATE employees SET face_at=? WHERE employee_no=? AND face_at IS NULL", (today, no))
         else:
-            db.ex("INSERT INTO employees(employee_no, name, gender, schedule_id, face_at) VALUES (?,?,?,?,?)",
-                  (no, u.get("name") or f"Empleado {no}", u.get("gender", "unknown"),
-                   sched["id"] if sched else None, today))
+            add_from_device(dev, no, u.get("name"), u.get("gender", "unknown"), today)
             new.append(no)
     if new:
         db.audit("sistema", "empleados con rostro importados del equipo", f"{dev['name']}: {', '.join(new)}")
@@ -353,9 +365,17 @@ def prepare_face(raw: bytes) -> bytes:
     return buf.getvalue()
 
 
+def local_devices(local_id):
+    """Equipos activos de un local (ninguno si el empleado aún no tiene local)."""
+    if local_id is None:
+        return []
+    return db.q("SELECT * FROM devices WHERE active=1 AND local_id=? ORDER BY id", (local_id,))
+
+
 def push_employee(emp, devices=None):
-    """Envía usuario + rostro a todos los equipos activos. Devuelve lista de (equipo, ok, mensaje)."""
-    devices = devices or db.q("SELECT * FROM devices WHERE active=1")
+    """Envía usuario + rostro a los equipos activos DEL LOCAL del empleado (no a los de otros locales).
+    Devuelve lista de (equipo, ok, mensaje)."""
+    devices = devices if devices is not None else local_devices(emp["local_id"])
     results = []
     for dev in devices:
         try:
@@ -377,9 +397,18 @@ def push_employee(emp, devices=None):
     return results
 
 
-def remove_employee(emp):
+def remove_employee(emp, local_ids=None):
+    """Borra el usuario y su rostro de los equipos activos.
+    local_ids=None: de los equipos de TODOS los locales. Es lo seguro al dar de baja o al cambiar el N°: el N° es
+    único en toda la empresa, así que ese N° en cualquier equipo es esta persona (pudo registrarse para marcar en
+    otro local); si quedara, seguiría marcando y el N° viejo volvería a aparecer como empleado nuevo.
+    local_ids=[...]: solo los equipos de esos locales (al pasar a la persona a otro local se retira del anterior)."""
+    if local_ids is None:
+        devs = db.q("SELECT * FROM devices WHERE active=1")
+    else:
+        devs = [d for lid in local_ids for d in local_devices(lid)]
     results = []
-    for dev in db.q("SELECT * FROM devices WHERE active=1"):
+    for dev in devs:
         try:
             c = client(dev)
             try:
@@ -388,6 +417,8 @@ def remove_employee(emp):
                 pass
             c.delete_user(emp["employee_no"])
             results.append((dev["name"], True, "Eliminado"))
+            # ya no está en ese equipo: no debe seguir figurando como «En equipo»
+            db.ex("DELETE FROM employee_sync WHERE employee_id=? AND device_id=?", (emp["id"], dev["id"]))
         except ISAPIError as e:
             results.append((dev["name"], False, str(e)))
     return results
@@ -401,18 +432,32 @@ def _meaningful(name, no):
     return "" if not n or n == str(no).lower() or n == f"empleado {str(no).lower()}" else n
 
 
-def compare_users():
-    """Compara los usuarios de todos los equipos activos. Con dos o más biométricos, una misma persona debe
-    tener el MISMO N° de empleado en todos: si no, sus marcas se cuentan como de otra persona.
-    Devuelve (equipos, filas, errores). Estado de cada fila: conflicto | duplicado | falta | ok."""
-    devs, errors, data = db.q("SELECT * FROM devices WHERE active=1 ORDER BY id"), {}, {}
+def same_local_devices(device_ids):
+    """Equipos activos de esa lista, todos de un mismo local (si se mezclan locales: ValueError)."""
+    ids = [int(i) for i in device_ids]
+    if not ids:
+        return []
+    devs = db.q(f"SELECT * FROM devices WHERE active=1 AND id IN ({','.join('?' * len(ids))}) ORDER BY id", ids)
+    if len({d["local_id"] for d in devs}) > 1:
+        raise ValueError("Solo se comparan equipos de un mismo local.")
+    return devs
+
+
+def compare_users(device_ids):
+    """Compara los usuarios de los equipos activos indicados (todos de un mismo local). Con dos o más biométricos,
+    una misma persona debe tener el MISMO N° de empleado en todos: si no, sus marcas se cuentan como de otra persona.
+    Devuelve (equipos, filas, errores). Estado de cada fila: conflicto | duplicado | falta | ok.
+    De cada fila solo se da el nombre del sistema (app_name/emp_id) si el empleado es de ese local; si el N° es de
+    alguien de otro local, other_local=True y nada más."""
+    devs, errors, data = same_local_devices(device_ids), {}, {}
+    local_id = devs[0]["local_id"] if devs else None
     for dev in devs:
         try:
             data[dev["id"]] = {str(u.get("employeeNo") or "").strip(): u for u in client(dev).search_users()}
         except ISAPIError as e:
             errors[dev["id"]] = str(e)
     devs = [d for d in devs if d["id"] in data]
-    app_names = {e["employee_no"]: e for e in db.q("SELECT id, employee_no, name, active FROM employees")}
+    app_names = {e["employee_no"]: e for e in db.q("SELECT id, employee_no, name, active, local_id FROM employees")}
     nos = sorted({no for users in data.values() for no in users if no},
                  key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n))
     rows = []
@@ -423,10 +468,13 @@ def compare_users():
             per[dev["id"]] = u and {"name": u.get("name") or "", "faces": int(u.get("numOfFace") or 0)}
         names = {_meaningful(v["name"], no) for v in per.values() if v} - {""}
         emp = app_names.get(no) or {}
+        other = bool(emp) and emp["local_id"] != local_id
+        if other:
+            emp = {}
         st = ("conflicto" if len(names) > 1 else
               "falta" if any(not v or not v["faces"] for v in per.values()) else "ok")
         rows.append({"no": no, "app_name": emp.get("name"), "emp_id": emp.get("id"), "per": per, "status": st,
-                     "names": names})
+                     "names": names, "other_local": other})
     # La misma persona (mismo nombre) con N° distinto en cada equipo
     by_name = {}
     for r in rows:
@@ -439,10 +487,11 @@ def compare_users():
     return devs, rows, errors
 
 
-def copy_to_missing(nos):
-    """Copia usuario + rostro desde el equipo que lo tiene a los equipos activos donde falta (o no tiene
-    rostro). Nunca toca un N° que en otro equipo es de otra persona. Devuelve (copiados, mensajes)."""
-    devs, rows, errors = compare_users()
+def copy_to_missing(nos, device_ids):
+    """Copia usuario + rostro desde el equipo que lo tiene a los equipos indicados (activos, de un mismo local)
+    donde falta (o no tiene rostro). Nunca toca un N° que en otro equipo es de otra persona.
+    Devuelve (copiados, mensajes)."""
+    devs, rows, errors = compare_users(device_ids)
     by_id = {d["id"]: d for d in devs}
     done, msgs = 0, []
     for r in rows:

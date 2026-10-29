@@ -4,7 +4,11 @@
   <div class="col-md-4"><label class="form-label">IP del equipo</label><input name="host" value="{{ dv.host or '' }}" class="form-control mono" required placeholder="192.168.1.19"></div>
   <div class="col-6 col-md-2"><label class="form-label">Puerto</label><input name="port" type="number" value="{{ dv.port or 80 }}" class="form-control mono"></div>
   <div class="col-6 col-md-2 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="https" value="1" {{ 'checked' if dv.https }}><label class="form-check-label">HTTPS</label></div></div>
-  <div class="col-md-4"><label class="form-label">Local</label><input name="sede" value="{{ dv.sede or '' }}" class="form-control" list="sedes-list" placeholder="Paso Largo"><div class="form-text">Dónde está este biométrico. Avisa cuando alguien marca en un local que no es el de su departamento.</div></div>
+  {% set dloc = dv.local_id if dv.id else default_local %}
+  <div class="col-md-4"><label class="form-label">Local</label><select name="local_id" class="form-select" required>
+    {% if dloc is none or local_opts|selectattr('id','equalto',dloc)|list|length == 0 %}<option value="">Elige el local…</option>{% endif %}
+    {% for lo in local_opts %}<option value="{{ lo.id }}" {{ 'selected' if lo.id == dloc }}>{{ lo.name }}</option>{% endfor %}</select>
+    <div class="form-text">Dónde está este biométrico. Los empleados del local se envían solo a sus equipos.</div></div>
   <div class="col-md-4"><label class="form-label">Usuario del equipo</label><input name="username" value="{{ dv.username or 'admin' }}" class="form-control" required></div>
   <div class="col-md-4"><label class="form-label">Contraseña</label><input name="password" type="password" class="form-control" {{ '' if dv.id else 'required' }} autocomplete="new-password" placeholder="{{ 'Dejar vacío para no cambiar' if dv.id else '' }}"></div>
   <div class="col-md-4"><label class="form-label">Zona horaria</label><input value="UTC{{ local_offset() }} (la de esta PC)" class="form-control" disabled><div class="form-text">La hora del equipo se corrige sola.</div></div>

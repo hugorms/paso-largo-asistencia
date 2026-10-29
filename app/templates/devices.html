@@ -1,10 +1,9 @@
 {% extends "base.html" %}{% block title %}Dispositivos{% endblock %}
 {% block content %}
-<datalist id="sedes-list">{% for s in sedes or [] %}<option value="{{ s }}">{% endfor %}</datalist>
 <div class="page-head"><div><h1>Dispositivos</h1><div class="sub">Terminales de reconocimiento facial conectados por ISAPI</div></div>
-{% if u.role == 'admin' %}<div class="page-actions">
-  <form method="post" action="/dispositivos/buscar" onsubmit="this.querySelector('button').disabled=true;this.querySelector('span').textContent='Buscando… (unos 10 s)'"><button class="btn btn-primary" title="Busca los biométricos conectados a la red de esta PC y reconecta los que cambiaron de IP"><i class="bi bi-search"></i> <span>Buscar biométrico</span></button></form>
-  {% if devs|selectattr('active')|list|length > 1 %}<a href="/dispositivos/comparar" class="btn btn-outline-secondary" title="Revisa que cada persona tenga el mismo N° y su rostro en todos los biométricos" onclick="this.classList.add('disabled');this.querySelector('span').textContent='Revisando…'"><i class="bi bi-people"></i> <span>Revisar empleados entre equipos</span></a>{% endif %}
+{% if can_edit %}<div class="page-actions">
+  {% if u.role == 'admin' %}<form method="post" action="/dispositivos/buscar" onsubmit="this.querySelector('button').disabled=true;this.querySelector('span').textContent='Buscando… (unos 10 s)'"><button class="btn btn-primary" title="Busca los biométricos conectados a la red de esta PC y reconecta los que cambiaron de IP"><i class="bi bi-search"></i> <span>Buscar biométrico</span></button></form>{% endif %}
+  {% for cl in compare_locals %}<a href="/dispositivos/comparar?local={{ cl.id }}" class="btn btn-outline-secondary" title="Revisa que cada persona tenga el mismo N° y su rostro en todos los biométricos de {{ cl.name }}" onclick="this.classList.add('disabled');this.querySelector('span').textContent='Revisando…'"><i class="bi bi-people"></i> <span>Revisar empleados entre equipos{{ ' de ' ~ cl.name if compare_locals|length > 1 }}</span></a>{% endfor %}
   {% if devs %}<button class="btn btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#new"><i class="bi bi-plus-lg"></i> Registrar otro equipo</button>{% endif %}</div>{% endif %}</div>
 {% if searched %}<div class="card mb-3"><div class="card-header"><span><i class="bi bi-search me-1"></i> Biométricos encontrados en la red</span><span class="small text-secondary">Red de esta PC: {{ nets|join(', ') or 'sin conexión' }}</span></div>
 {% if found %}<div class="table-responsive"><table class="table table-sm align-middle mb-0">
@@ -15,13 +14,13 @@
       {% elif f.status == 'movido' %}<span class="badge text-bg-success">Es «{{ f.dev_name }}» — {{ f.note }}</span>
       {% elif f.status == 'sin_acceso' %}<span class="badge text-bg-warning">Es «{{ f.dev_name }}»</span> <span class="small">{{ f.note }}</span>
       {% else %}<span class="small text-secondary">No registrado{{ '' if f.serial else ' (no se pudo leer con las claves guardadas)' }}.</span>
-        {% for dv in devs if not dv.online %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="d-inline"><input type="hidden" name="host" value="{{ f.ip }}"><button class="btn btn-sm btn-outline-primary ms-1">Usar para «{{ dv.name }}»</button></form>{% endfor %}
+        {% for dv in devs if not dv.online and u.role == 'admin' %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="d-inline"><input type="hidden" name="host" value="{{ f.ip }}"><button class="btn btn-sm btn-outline-primary ms-1">Usar para «{{ dv.name }}»</button></form>{% endfor %}
       {% endif %}</td></tr>{% endfor %}
   </tbody></table></div>
 {% else %}<div class="card-body small">No respondió ningún equipo. Revisa que el biométrico esté encendido y conectado al mismo router o switch que esta PC.</div>{% endif %}
 </div>{% endif %}
 {% if compared %}{% set st = {'conflicto': ('danger', 'Mismo N°, otra persona'), 'duplicado': ('warning', 'Misma persona con otro N°'), 'falta': ('warning', 'Falta en un equipo'), 'ok': ('success', 'En todos')} %}
-<div class="card mb-3"><div class="card-header"><span><i class="bi bi-people me-1"></i> Empleados en cada biométrico</span>
+<div class="card mb-3"><div class="card-header"><span><i class="bi bi-people me-1"></i> Empleados en cada biométrico{% for cl in local_choices if cl.id == compare_local %} de {{ cl.name }}{% endfor %}</span>
   <a href="/dispositivos" class="btn btn-sm btn-outline-secondary">Cerrar</a></div>
   <div class="card-body small pb-2">Con varios biométricos, cada persona debe tener <b>el mismo N° de empleado en todos</b>: el sistema une sus marcas por ese número.
     Mira que las fotos de cada fila sean de la misma persona. <b>No uses «Sincronizar todos»</b> mientras haya filas en rojo: pisaría el rostro de esa persona en el otro equipo.
@@ -32,25 +31,25 @@
       <span class="badge text-bg-warning">{{ nfal|length }} faltan en algún equipo</span>
       <span class="badge text-bg-{{ 'danger' if nconf else 'light' }}">{{ nconf }} N° con dos personas distintas</span>
       <span class="badge text-bg-{{ 'warning' if ndup else 'light' }}">{{ ndup }} posibles duplicados</span>
-      {% if nfal %}<form method="post" action="/dispositivos/copiar" class="ms-auto" onsubmit="this.querySelector('button').disabled=true">{% for r in nfal %}<input type="hidden" name="no" value="{{ r.no }}">{% endfor %}
+      {% if nfal %}<form method="post" action="/dispositivos/copiar" class="ms-auto" onsubmit="this.querySelector('button').disabled=true"><input type="hidden" name="local" value="{{ compare_local }}">{% for r in nfal %}<input type="hidden" name="no" value="{{ r.no }}">{% endfor %}
         <button class="btn btn-sm btn-primary" title="Copia usuario y rostro desde el equipo que lo tiene a los que les falta"><i class="bi bi-copy"></i> {{ "Copiar el que falta" if nfal|length == 1 else "Copiar los %d que faltan"|format(nfal|length) }}</button></form>{% endif %}
     </div></div>
   {% if crows %}<div class="table-responsive"><table class="table table-sm align-middle mb-0">
     <thead><tr><th>N°</th><th>En el sistema</th>{% for d in cdevs %}<th>{{ d.name }}</th>{% endfor %}<th>Estado</th></tr></thead><tbody>
     {% for r in crows %}<tr class="{{ 'table-danger' if r.status == 'conflicto' }}">
       <td class="mono">{{ r.no }}</td>
-      <td>{% if r.emp_id %}<a href="/empleados/{{ r.emp_id }}">{{ r.app_name }}</a>{% else %}<span class="text-secondary">—</span>{% endif %}</td>
+      <td>{% if r.emp_id %}<a href="/empleados/{{ r.emp_id }}">{{ r.app_name }}</a>{% elif r.other_local %}<span class="text-secondary">Persona de otro local</span>{% else %}<span class="text-secondary">—</span>{% endif %}</td>
       {% for d in cdevs %}{% set v = r.per[d.id] %}<td>{% if v %}<div class="d-flex align-items-center gap-2">
         {% if v.faces %}<img src="/dispositivos/{{ d.id }}/rostro/{{ r.no }}" loading="lazy" alt="" data-photo="/dispositivos/{{ d.id }}/rostro/{{ r.no }}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;cursor:zoom-in" onerror="this.style.visibility='hidden'">{% endif %}
         <span>{{ v.name or '(sin nombre)' }}{% if not v.faces %}<br><span class="text-warning small">sin rostro</span>{% endif %}</span></div>
         {% else %}<span class="text-secondary small">no está</span>{% endif %}</td>{% endfor %}
       <td><span class="badge text-bg-{{ st[r.status][0] }}">{{ st[r.status][1] }}</span>
         {% if r.others %}<div class="small text-secondary">mismo nombre que N° {{ r.others|join(', ') }}</div>{% endif %}
-        {% if r.status == 'falta' %}<form method="post" action="/dispositivos/copiar" class="d-inline"><input type="hidden" name="no" value="{{ r.no }}"><button class="btn btn-sm btn-link p-0 ms-1">Copiar</button></form>{% endif %}</td>
+        {% if r.status == 'falta' %}<form method="post" action="/dispositivos/copiar" class="d-inline"><input type="hidden" name="local" value="{{ compare_local }}"><input type="hidden" name="no" value="{{ r.no }}"><button class="btn btn-sm btn-link p-0 ms-1">Copiar</button></form>{% endif %}</td>
     </tr>{% endfor %}</tbody></table></div>
   {% else %}<div class="card-body small">Los equipos no tienen usuarios registrados.</div>{% endif %}
 </div>{% endif %}
-{% if u.role == 'admin' %}<div class="collapse {{ 'show' if not devs }}" id="new"><div class="card mb-3"><div class="card-header">{{ 'Otro equipo (distinto a los de abajo)' if devs else 'Registrar el equipo' }}</div><div class="card-body">
+{% if can_edit %}<div class="collapse {{ 'show' if not devs }}" id="new"><div class="card mb-3"><div class="card-header">{{ 'Otro equipo (distinto a los de abajo)' if devs else 'Registrar el equipo' }}</div><div class="card-body">
   {% if devs %}<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> Los equipos ya registrados aparecen abajo con sus datos: úsalos desde ahí. Si pones la IP de uno de ellos, se actualiza ese mismo en vez de crear otro.</div>{% endif %}
   {% set dv = {} %}{% include "_device_form.html" %}</div></div></div>{% endif %}
 <div class="row g-3">
@@ -63,7 +62,7 @@
   </div>
   <div class="card-body">
   <dl class="row small mb-3 gy-1">
-    <dt class="col-5 text-secondary fw-normal">Local</dt><dd class="col-7 mb-0">{{ dv.sede or '— (ponlo en Editar)' }}</dd>
+    <dt class="col-5 text-secondary fw-normal">Local</dt><dd class="col-7 mb-0">{{ dv.local or '— (ponlo en Editar)' }}</dd>
     <dt class="col-5 text-secondary fw-normal">Dirección</dt><dd class="col-7 mb-0 mono">{{ dv.host }}:{{ dv.port }}</dd>
     <dt class="col-5 text-secondary fw-normal">N° de serie</dt><dd class="col-7 mb-0 mono small">{{ dv.serial or '—' }}</dd>
     <dt class="col-5 text-secondary fw-normal">Modelo</dt><dd class="col-7 mb-0">{{ dv.model or '—' }}</dd>
@@ -72,14 +71,14 @@
     <dt class="col-5 text-secondary fw-normal">Último evento</dt><dd class="col-7 mb-0 mono">{{ (dv.last_event_time or '—').replace('T',' ') }}</dd>
     <dt class="col-5 text-secondary fw-normal">Eventos guardados</dt><dd class="col-7 mb-0 mono">{{ dv.n_events }}</dd>
   </dl>
-  {% if u.role == 'admin' %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="input-group input-group-sm mb-3" title="Si el equipo cambió de IP, escribe la nueva y pulsa «Probar y conectar»">
+  {% if can_edit %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="input-group input-group-sm mb-3" title="Si el equipo cambió de IP, escribe la nueva y pulsa «Probar y conectar»">
     <span class="input-group-text">IP</span><input name="host" value="{{ dv.host }}" class="form-control mono" required aria-label="IP del equipo"><span class="input-group-text mono">:{{ dv.port }}</span>
     <button class="btn btn-outline-primary"><i class="bi bi-plug"></i> Probar y conectar</button></form>{% endif %}
   {% if clock_warnings.get(dv.id) %}<div class="alert alert-warning py-2 small mb-3"><i class="bi bi-clock-history"></i> {{ clock_warnings[dv.id] }}</div>{% endif %}
   {% if dv.last_error and not dv.online %}<div class="alert alert-danger py-2 small mb-3"><i class="bi bi-exclamation-triangle"></i> {{ dv.last_error }}
-    {% if dv.active and dv.serial %}<div class="mt-1 text-body-secondary">Si cambiaste de red, el sistema lo busca solo cada 2 minutos por su número de serie. También puedes pulsar <b>Buscar biométrico</b> arriba o escribir la IP nueva.</div>{% endif %}</div>{% endif %}
+    {% if dv.active and dv.serial %}<div class="mt-1 text-body-secondary">Si cambiaste de red, el sistema lo busca solo cada 2 minutos por su número de serie. {% if can_edit %}También puedes {% if u.role == 'admin' %}pulsar <b>Buscar biométrico</b> arriba o {% endif %}escribir la IP nueva.{% endif %}</div>{% endif %}</div>{% endif %}
   <div class="d-flex flex-wrap gap-2">
-    {% if u.role == 'admin' %}
+    {% if can_edit %}
     <form method="post" action="/dispositivos/{{ dv.id }}/probar"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-plug"></i> Probar</button></form>
     <form method="post" action="/dispositivos/{{ dv.id }}/hora" onsubmit="return confirm('Se pondrá en el equipo la hora de este servidor: {{ server_now() }}. ¿Es correcta?')"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock"></i> Sincronizar hora</button></form>
     <form method="post" action="/dispositivos/{{ dv.id }}/eventos"><input type="hidden" name="dias" value="31"><button class="btn btn-sm btn-outline-secondary" title="Descargar las marcaciones de los últimos 31 días"><i class="bi bi-download"></i> Descargar historial</button></form>
@@ -92,7 +91,7 @@
     </div></div>
     {% endif %}
   </div>
-  {% if u.role == 'admin' %}<div class="collapse" id="e{{ dv.id }}"><hr>{% include "_device_form.html" %}</div>{% endif %}
+  {% if can_edit %}<div class="collapse" id="e{{ dv.id }}"><hr>{% include "_device_form.html" %}</div>{% endif %}
   </div>
 </div></div>
 {% else %}<div class="col"><div class="card"><div class="empty"><i class="bi bi-cpu"></i>Aún no hay equipos configurados.</div></div></div>{% endfor %}

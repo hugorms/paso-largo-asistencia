@@ -93,8 +93,8 @@ function paint(d, animate){
   for (const k of ['total','presentes','tarde','ausente','pendiente','justificado']) document.getElementById('k-'+k).textContent = d[k];
   document.getElementById('now').textContent = d.now;
   document.getElementById('events').innerHTML = d.events.map(ev => `<tr><td class="mono">${ev.event_time.slice(11,19)} <span class="text-secondary small">${ev.event_time.slice(8,10)}/${ev.event_time.slice(5,7)}</span></td>
-      <td>${esc(ev.emp_name || ev.name || '—')} <span class="text-secondary small">${esc(ev.employee_no||'')}</span></td>
-      <td><span class="badge text-bg-${ev.valid?'success':'secondary'}">${esc(ev.minor_name)}</span></td><td>${esc(ev.device||'Manual')}${ev.away ? ` <span class="badge text-bg-info" title="Es de ${esc(ev.department||'')} (${esc(ev.dep_sede||'')})">Fue a ${esc(ev.away)}</span>` : ''}</td>
+      <td${ev.other ? ' class="fst-italic text-secondary"' : ''}>${esc(ev.emp_name || ev.name || '—')} <span class="text-secondary small">${esc(ev.employee_no||'')}</span></td>
+      <td><span class="badge text-bg-${ev.valid?'success':'secondary'}">${esc(ev.minor_name)}</span></td><td>${esc(ev.device||'Manual')}${ev.away ? ` <span class="badge text-bg-info" title="Es de ${esc(ev.home||'')}${ev.department ? ' · ' + esc(ev.department) : ''}">Fue a ${esc(ev.away)}</span>` : ''}</td>
       <td>${ev.picture_url ? `<button type="button" class="btn btn-sm btn-outline-secondary btn-icon" title="Ver foto en grande" ${photoAttrs(ev)}><i class="bi bi-image"></i></button>` : '—'}</td></tr>`).join('') || empty('clock-history','Sin marcaciones todavía', 5);
   const shot = d.events.find(ev => ev.picture_url && ev.employee_no);
   if (shot && shot.id !== lastShot) {

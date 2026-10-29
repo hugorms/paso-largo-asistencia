@@ -70,6 +70,10 @@ def user(request: Request, *roles):
     if request.session.get("cambiar_clave") and request.url.path not in ("/cuenta", "/logout"):
         flash(request, "Antes de seguir, cambia la contraseña por defecto.", "warning")
         raise Redirect("/cuenta")
+    if (not alcance.is_admin(u) and request.url.path not in ("/cuenta", "/logout", "/sin-local")
+            and not alcance.allowed(u)):
+        # encargado o consulta sin ningún local activo asignado: no hay nada que mostrarle todavía
+        raise Redirect("/sin-local")
     if roles and u["role"] not in roles:
         flash(request, "No tienes permiso para esa sección.", "danger")
         raise Redirect("/")
@@ -132,7 +136,15 @@ async def login(request: Request):
     if f.get("password") == DEFAULT_PASSWORD:
         request.session["cambiar_clave"] = True
         return back("/cuenta")
-    return back("/")
+    return back("/resumen" if alcance.is_admin(u) else "/")
+
+
+@app.get("/sin-local", response_class=HTMLResponse)
+def no_local(request: Request):
+    u = user(request)
+    if alcance.is_admin(u) or alcance.allowed(u):
+        return back("/")
+    return templates.TemplateResponse(request, "sin_local.html", {"u": u, "roles": ROLES})
 
 
 @app.get("/logout")
@@ -146,7 +158,10 @@ async def local_choose(request: Request):
     """Selector del menú: qué local se está viendo (vacío = todos los permitidos)."""
     u, f = user(request), await form(request)
     alcance.choose(request, u, f.get("local"))
-    return back(seguridad.safe_back(request.headers.get("referer"), "/"))
+    # next: a dónde ir después (p. ej. «Ver detalle» en el resumen de locales); solo rutas de este sistema
+    fallback = seguridad.safe_back(request.headers.get("referer"), "/")
+    nxt = (f.get("next") or "").replace("\\", "/")  # «/\otro.sitio» el navegador lo toma como «//otro.sitio»
+    return back(seguridad.safe_back(nxt, fallback) if nxt else fallback)
 
 
 @app.get("/cuenta", response_class=HTMLResponse)
@@ -178,15 +193,24 @@ async def account_save(request: Request):
 TREND_KEYS = {"Puntual": "puntual", "Tarde": "tarde", "Ausente": "ausente"}
 
 
-def trend_data(days: int):
+def emp_locales(request, u):
+    """Locales de los empleados que se ven ahora, para attendance.compute: None = todos (el admin sin
+    elegir local, que también ve los que aún no tienen local)."""
+    vis = alcance.ids(request, u)
+    if alcance.is_admin(u) and request.session.get("local") not in vis:
+        return None
+    return vis
+
+
+def trend_data(days: int, locales=None):
     """Puntuales, tardanzas y faltas de los últimos `days` días (0 = últimas 24 h, por hora),
-    más los totales del periodo anterior para comparar."""
+    más los totales del periodo anterior para comparar. locales: como en attendance.compute."""
     today = date.today()
     if not days:
         now = datetime.now().replace(minute=0, second=0, microsecond=0)
         first = now - timedelta(hours=23)
         by_hour = defaultdict(lambda: {"puntual": 0, "tarde": 0, "ausente": 0})
-        rows = attendance.compute(today - timedelta(days=2), today)
+        rows = attendance.compute(today - timedelta(days=2), today, locales=locales)
         for r in rows:
             if r["entry"] and r["status"] in ("Puntual", "Tarde"):
                 by_hour[r["entry"].replace(minute=0, second=0, microsecond=0)][TREND_KEYS[r["status"]]] += 1
@@ -199,7 +223,7 @@ def trend_data(days: int):
         return {"days": 0, "series": series, "total": total, "prev": prev}
     start = today - timedelta(days=days - 1)
     by_day = defaultdict(lambda: {"puntual": 0, "tarde": 0, "ausente": 0})
-    for r in attendance.compute(start - timedelta(days=days), today):
+    for r in attendance.compute(start - timedelta(days=days), today, locales=locales):
         if r["status"] in TREND_KEYS:
             by_day[r["date"]][TREND_KEYS[r["status"]]] += 1
     series = [{"date": d.strftime("%d/%m"), "dow": "LMMJVSD"[d.weekday()], **by_day[d]}
@@ -215,28 +239,44 @@ def sedes():
                                     SELECT sede FROM departments) WHERE COALESCE(trim(sede),'')<>'' ORDER BY 1""")]
 
 
-def _mark_away(evs):
-    """Marca los eventos hechos en un equipo de otro local que el del departamento del empleado."""
+def _mark_away(request, u, evs):
+    """Prepara eventos para mostrar: marca los hechos en un equipo de otro local que el del empleado y
+    esconde quién es cuando el empleado es de un local que este usuario no puede ver."""
     for ev in evs:
-        ev["away"] = ev.get("dev_sede") if attendance.away_from(ev.get("dep_sede"), ev.get("dev_sede")) else None
+        if ev.get("emp_id") and not alcance.can_see(request, u, ev.get("emp_local")):
+            ev.update(emp_name="Persona de otro local", name=None, employee_no=None, emp_id=None, emp_local=None,
+                      picture_url=None, department=None, home=None, other=True)
+        ev["away"] = ev.get("dev_local") if attendance.away_from(ev.get("home"), ev.get("dev_local")) else None
     return evs
 
 
-def dashboard_data(days: int = 7):
+def visible_events(request, u, where, args, limit, extra_select="", extra_join=""):
+    """Eventos de los empleados que se ven ahora (en cualquier equipo) y de los equipos que se ven ahora
+    (de cualquier persona; los de otro local salen sin nombre ni foto)."""
+    ce, ae = alcance.sql(request, u, "e.local_id", include_null=True)
+    cd, ad = alcance.sql(request, u, "d.local_id", include_null=True)
+    rows = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, e.local_id AS emp_local, le.name AS home,
+                    d.name AS device, ld.name AS dev_local, dp.name AS department{extra_select} FROM events ev
+                    LEFT JOIN employees e ON e.employee_no=ev.employee_no LEFT JOIN devices d ON d.id=ev.device_id
+                    LEFT JOIN departments dp ON dp.id=e.department_id LEFT JOIN locales le ON le.id=e.local_id
+                    LEFT JOIN locales ld ON ld.id=d.local_id {extra_join}
+                    WHERE {' AND '.join(list(where) + [f"({ce} OR {cd})"])}
+                    ORDER BY ev.event_time DESC, ev.id DESC LIMIT {int(limit)}""", list(args) + ae + ad)
+    return _mark_away(request, u, rows)
+
+
+def dashboard_data(request, u, days: int = 7):
     today = date.today()
-    rows = attendance.compute(today, today)
+    locs = emp_locales(request, u)
+    rows = attendance.compute(today, today, locales=locs)
     count = lambda st: sum(1 for r in rows if r["status"] == st)
     fails = ",".join(map(str, sorted(MINOR_FAIL)))
-    last = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device, d.sede AS dev_sede,
-                   dp.sede AS dep_sede, dp.name AS department FROM events ev
-                   LEFT JOIN employees e ON e.employee_no=ev.employee_no LEFT JOIN devices d ON d.id=ev.device_id
-                   LEFT JOIN departments dp ON dp.id=e.department_id
-                   WHERE ev.employee_no IS NOT NULL OR ev.minor IN ({fails})
-                   ORDER BY ev.event_time DESC, ev.id DESC LIMIT 15""")
-    for ev in _mark_away(last):
+    last = visible_events(request, u, [f"(ev.employee_no IS NOT NULL OR ev.minor IN ({fails}))"], [], 15)
+    for ev in last:
         ev["minor_name"] = MINOR_NAMES.get(ev["minor"], f"Evento {ev['minor']}") if ev["source"] == "equipo" else "Marca manual"
-    devs = db.q("SELECT id, name, online, last_seen, last_error FROM devices WHERE active=1")
-    return {"total": db.q1("SELECT COUNT(*) n FROM employees WHERE active=1")["n"],
+    cd, ad = alcance.sql(request, u, "local_id", include_null=True)
+    devs = db.q(f"SELECT id, name, online, last_seen, last_error FROM devices WHERE active=1 AND {cd}", ad)
+    return {"total": db.q1(f"SELECT COUNT(*) n FROM employees WHERE active=1 AND {cd}", ad)["n"],
             "puntual": count("Puntual"), "tarde": count("Tarde"), "ausente": count("Ausente"),
             "pendiente": count("Pendiente"), "justificado": count("Justificado"),
             "presentes": sum(1 for r in rows if r["entry"]),
@@ -247,30 +287,58 @@ def dashboard_data(days: int = 7):
                            "sedes": ", ".join(r["away"]), "back": not attendance.away_from(r["home_sede"], r["trail"][-1][0]),
                            "trail": [{"sede": s, "time": t.strftime("%H:%M")} for s, t in r["trail"]]}
                           for r in rows if r["away"]],
-            "trend": trend_data(days), "events": last, "devices": devs, "now": datetime.now().strftime("%H:%M:%S")}
+            "trend": trend_data(days, locs), "events": last, "devices": devs, "now": datetime.now().strftime("%H:%M:%S")}
 
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    return render(request, "dashboard.html", user(request), d=dashboard_data())
+    u = user(request)
+    return render(request, "dashboard.html", u, d=dashboard_data(request, u))
 
 
 @app.get("/api/dashboard")
 def api_dashboard(request: Request, dias: int = 7):
-    user(request)
-    return JSONResponse(dashboard_data(dias if dias in (0, 7, 30) else 7))
+    u = user(request)
+    return JSONResponse(dashboard_data(request, u, dias if dias in (0, 7, 30) else 7))
 
 
 # ------------------------------------------------------------------ empleados
-def emp_lookups():
-    return {"departments": db.q("SELECT * FROM departments ORDER BY name"),
-            "schedules": db.q("SELECT * FROM schedules ORDER BY name")}
+def emp_lookups(local_ids):
+    """Áreas y horarios de esos locales (cada uno lleva su local_id para filtrarlos en el formulario)."""
+    if not local_ids:
+        return {"departments": [], "schedules": []}
+    marks = ",".join("?" * len(local_ids))
+    return {"departments": db.q(f"""SELECT d.*, l.name AS local FROM departments d JOIN locales l ON l.id=d.local_id
+                                    WHERE d.local_id IN ({marks}) ORDER BY l.name, d.name""", local_ids),
+            "schedules": db.q(f"SELECT * FROM schedules WHERE local_id IN ({marks}) ORDER BY name", local_ids)}
+
+
+def next_employee_no():
+    """Siguiente N° libre en toda la empresa (el N° es único entre todos los locales)."""
+    return str((db.q1("SELECT MAX(CAST(employee_no AS INTEGER)) m FROM employees")["m"] or 0) + 1)
+
+
+def _emp_form(request, u, e, sync=()):
+    """Formulario de empleado. Si no se sabe a qué local va (o se puede cambiar), muestra el selector
+    con solo los locales permitidos; áreas y horarios solo de esos locales."""
+    allowed = alcance.allowed(u)
+    if e.get("id"):
+        # al editar se puede cambiar a otro local permitido, nunca a uno ajeno
+        locs = allowed if (e.get("local_id") in allowed or alcance.is_admin(u)) else []
+    else:
+        locs = [i for i in alcance.ids(request, u) if i in allowed]
+    pick = len(locs) > 1 or (bool(locs) and e.get("local_id") not in locs)
+    lookup_ids = locs or ([e["local_id"]] if e.get("local_id") is not None else [])
+    local_opts = [c for c in alcance.choices(u) if c["id"] in locs]
+    return render(request, "employee_form.html", u, e=e, sync=sync, pick_local=pick, local_opts=local_opts,
+                  **emp_lookups(lookup_ids))
 
 
 @app.get("/empleados", response_class=HTMLResponse)
 def employees(request: Request, q: str = "", dep: str = "", inactivos: str = ""):
     u = user(request)
-    where, args = ["1=1"], []
+    cond, args = alcance.sql(request, u, "e.local_id", include_null=True)
+    where = [cond]
     if not inactivos:
         where.append("e.active=1")
     if q:
@@ -284,27 +352,39 @@ def employees(request: Request, q: str = "", dep: str = "", inactivos: str = "")
                     (SELECT COUNT(*) FROM employee_sync x WHERE x.employee_id=e.id AND x.status='error') AS sync_err
                     FROM employees e LEFT JOIN departments d ON d.id=e.department_id
                     LEFT JOIN schedules s ON s.id=e.schedule_id WHERE {' AND '.join(where)} ORDER BY e.name""", args)
+    lids = alcance.ids(request, u)
+    dcond, dargs = alcance.sql(request, u, "local_id")
     return render(request, "employees.html", u, emps=emps, q=q, dep=dep, inactivos=inactivos,
-                  devs=db.q("SELECT id, name, host FROM devices WHERE active=1"), **emp_lookups())
+                  devs=db.q(f"SELECT id, name, host FROM devices WHERE active=1 AND {dcond} ORDER BY name", dargs),
+                  local_names={r["id"]: r["name"] for r in db.q("SELECT id, name FROM locales")} if len(lids) > 1 else None,
+                  local_opts=alcance.choices(u) if alcance.default_local(request, u) is None else None,
+                  **emp_lookups(lids))
 
 
 @app.get("/empleados/nuevo", response_class=HTMLResponse)
 def employee_new(request: Request):
     u = user(request, "admin", "encargado")
-    nxt = db.q1("SELECT MAX(CAST(employee_no AS INTEGER)) m FROM employees")["m"] or 0
-    return render(request, "employee_form.html", u, e={"employee_no": str(nxt + 1), "active": 1}, sync=[],
-                  **emp_lookups())
+    return _emp_form(request, u, {"employee_no": next_employee_no(), "active": 1,
+                                  "local_id": alcance.default_local(request, u)})
+
+
+def _emp_visible(request, u, eid):
+    """El empleado si este usuario puede verlo; si no (otro local o no existe), vuelve al listado con aviso."""
+    e = alcance.row(request, u, "employees", eid)
+    if not e:
+        flash(request, "Ese empleado no existe o es de otro local.", "danger")
+        raise Redirect("/empleados")
+    return e
 
 
 @app.get("/empleados/{eid}", response_class=HTMLResponse)
 def employee_edit(request: Request, eid: int):
     u = user(request, "admin", "encargado")
-    e = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
-    if not e:
-        raise Redirect("/empleados")
-    sync = db.q("""SELECT s.*, d.name AS device FROM employee_sync s JOIN devices d ON d.id=s.device_id
-                   WHERE s.employee_id=?""", (eid,))
-    return render(request, "employee_form.html", u, e=e, sync=sync, **emp_lookups())
+    e = _emp_visible(request, u, eid)
+    sync = [s for s in db.q("""SELECT s.*, d.name AS device, d.local_id FROM employee_sync s
+                               JOIN devices d ON d.id=s.device_id WHERE s.employee_id=?""", (eid,))
+            if alcance.can_see(request, u, s["local_id"])]  # equipos de otros locales: ni el nombre
+    return _emp_form(request, u, e, sync)
 
 
 @app.post("/empleados/guardar")
@@ -312,15 +392,42 @@ async def employee_save(request: Request):
     u = user(request, "admin", "encargado")
     raw = await request.form(max_part_size=8 * 1024 * 1024)  # photo_data (foto en texto) puede pasar de 1 MB
     f = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw.items()}
-    eid = int(f["id"]) if f.get("id") else None
+    eid = int(f["id"]) if (f.get("id") or "").isdigit() else None
+    old = _emp_visible(request, u, eid) if eid else None
     no = f.get("employee_no", "")
+
+    def fail(msg):
+        # vuelve a mostrar el formulario con lo que escribió (la foto hay que volver a elegirla)
+        flash(request, msg, "danger")
+        e = {k: f.get(k) for k in ("employee_no", "name", "document", "position", "email", "phone", "gender",
+                                   "hire_date")}
+        e.update(id=eid, active=1 if f.get("active") else 0, photo=old and old["photo"], face_at=old and old["face_at"],
+                 department_id=int(f["department_id"]) if (f.get("department_id") or "").isdigit() else None,
+                 schedule_id=int(f["schedule_id"]) if (f.get("schedule_id") or "").isdigit() else None,
+                 local_id=lid)
+        return _emp_form(request, u, e)
+
+    # Local del empleado: el elegido en el formulario, o el que ya tenía, o el que se está viendo
+    lid = int(f["local_id"]) if (f.get("local_id") or "").isdigit() else (
+        old["local_id"] if old else alcance.default_local(request, u))
+    if lid is None or lid not in alcance.allowed(u):
+        lid = old["local_id"] if old else None
+        return fail("Elige el local del empleado (solo puedes usar tus locales).")
     if not re.fullmatch(r"[A-Za-z0-9]{1,32}", no) or not f.get("name"):
-        flash(request, "El N° de empleado (solo letras/números) y el nombre son obligatorios.", "danger")
-        return back(f"/empleados/{eid}" if eid else "/empleados/nuevo")
-    dup = db.q1("SELECT id FROM employees WHERE employee_no=? AND id<>?", (no, eid or 0))
+        return fail("El N° de empleado (solo letras/números) y el nombre son obligatorios.")
+    # El N° es único en toda la empresa: si es de otro local no se dice de quién
+    dup = db.q1("SELECT id, name, local_id FROM employees WHERE employee_no=? AND id<>?", (no, eid or 0))
     if dup:
-        flash(request, f"Ya existe un empleado con el N° {no}.", "danger")
-        return back(f"/empleados/{eid}" if eid else "/empleados/nuevo")
+        nxt = next_employee_no()
+        if alcance.can_see(request, u, dup["local_id"]):
+            return fail(f"Ya existe un empleado con el N° {no} ({dup['name']}). El siguiente N° libre es {nxt}.")
+        return fail(f"Ese N° ya lo usa otro local. El siguiente N° libre es {nxt}.")
+    # Áreas y horarios: solo los del local del empleado
+    if f.get("department_id") and not db.q1("SELECT 1 FROM departments WHERE id=? AND local_id=?",
+                                            (f["department_id"], lid)):
+        return fail("El área elegida no es de ese local.")
+    if f.get("schedule_id") and not db.q1("SELECT 1 FROM schedules WHERE id=? AND local_id=?", (f["schedule_id"], lid)):
+        return fail("El horario elegido no es de ese local.")
 
     photo_name = None
     data = raw.get("photo_data")
@@ -334,23 +441,23 @@ async def employee_save(request: Request):
                 content = await upload.read()
             jpeg = devices.prepare_face(content)
         except Exception:
-            flash(request, "La foto no es una imagen válida.", "danger")
-            return back(f"/empleados/{eid}" if eid else "/empleados/nuevo")
+            return fail("La foto no es una imagen válida.")
         photo_name = f"{no}_{uuid.uuid4().hex[:8]}.jpg"
         (db.PHOTOS_DIR / photo_name).write_bytes(jpeg)
 
     vals = [no, f["name"], f.get("document"), f.get("department_id") or None, f.get("position"), f.get("email"),
             f.get("phone"), f.get("gender") or "unknown", f.get("schedule_id") or None, f.get("hire_date") or None,
-            1 if f.get("active") else 0]
-    renamed = None
+            1 if f.get("active") else 0, lid]
+    renamed = moved_from = None
     if eid:
-        old = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
         if old["employee_no"] != no:
             renamed = old
             # Sus marcas anteriores pasan al N° nuevo, para que el historial siga junto
             db.ex("UPDATE events SET employee_no=? WHERE employee_no=?", (no, old["employee_no"]))
+        if old["local_id"] is not None and old["local_id"] != lid:
+            moved_from = old["local_id"]
         db.ex("""UPDATE employees SET employee_no=?, name=?, document=?, department_id=?, position=?, email=?,
-                 phone=?, gender=?, schedule_id=?, hire_date=?, active=? WHERE id=?""", vals + [eid])
+                 phone=?, gender=?, schedule_id=?, hire_date=?, active=?, local_id=? WHERE id=?""", vals + [eid])
         if photo_name:
             db.ex("UPDATE employees SET photo=?, face_at=COALESCE(face_at, ?) WHERE id=?",
                   (photo_name, date.today().isoformat(), eid))
@@ -358,10 +465,17 @@ async def employee_save(request: Request):
                 (db.PHOTOS_DIR / old["photo"]).unlink(missing_ok=True)
     else:
         eid = db.ex("""INSERT INTO employees(employee_no, name, document, department_id, position, email, phone,
-                       gender, schedule_id, hire_date, active, photo, face_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       gender, schedule_id, hire_date, active, local_id, photo, face_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     vals + [photo_name, date.today().isoformat() if photo_name else None])
     db.audit(u["username"], "guardar empleado", f"{no} {f['name']}")
     emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
+    if moved_from and not renamed:
+        # Pasó a otro local: se retira de los equipos del local anterior (si cambió el N° ya se borra de todos abajo)
+        for name, ok, m in await run_in_threadpool(devices.remove_employee, old, [moved_from]):
+            if not ok:
+                flash(request, f"{name}: no se pudo retirar del equipo del local anterior ({m}).", "warning")
+        db.audit(u["username"], "empleado cambia de local", f"{no}: {moved_from} -> {lid}")
     if renamed:
         # Se borra del equipo el usuario con el N° viejo; si no, el equipo lo seguiría reconociendo
         # y volvería a aparecer aquí como otro empleado
@@ -380,7 +494,7 @@ async def employee_save(request: Request):
 
 def _flash_results(request, msg, res):
     if not res:
-        flash(request, msg + " (No hay equipos activos configurados.)", "warning")
+        flash(request, msg + " (Su local no tiene equipos activos.)", "warning")
     for name, ok, m in res:
         flash(request, f"{msg} {name}: {m}", "success" if ok else "danger")
         msg = ""
@@ -388,16 +502,17 @@ def _flash_results(request, msg, res):
 
 @app.post("/empleados/{eid}/sincronizar")
 async def employee_sync(request: Request, eid: int):
-    user(request, "admin", "encargado")
-    emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
+    u = user(request, "admin", "encargado")
+    emp = _emp_visible(request, u, eid)
     _flash_results(request, "", await run_in_threadpool(devices.push_employee, emp))
     return back(f"/empleados/{eid}")
 
 
 @app.post("/empleados/{eid}/eliminar")
 async def employee_delete(request: Request, eid: int):
-    u = user(request, "admin")
-    emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
+    u = user(request, "admin", "encargado")
+    emp = _emp_visible(request, u, eid)
+    # Se borra de los equipos de todos los locales: ese N° es solo de esta persona (ver devices.remove_employee)
     res = await run_in_threadpool(devices.remove_employee, emp)
     # Se conserva el historial de marcas; el empleado queda inactivo
     db.ex("UPDATE employees SET active=0 WHERE id=?", (eid,))
@@ -408,36 +523,37 @@ async def employee_delete(request: Request, eid: int):
 
 @app.post("/empleados/sincronizar-todos")
 async def employees_sync_all(request: Request):
-    u = user(request, "admin")
+    u = user(request, "admin", "encargado")
     ok = err = 0
-    for emp in db.q("SELECT * FROM employees WHERE active=1"):
+    # Solo los empleados de los locales que se están viendo; cada uno va a los equipos de su local
+    cond, args = alcance.sql(request, u, "local_id")
+    for emp in db.q(f"SELECT * FROM employees WHERE active=1 AND {cond}", args):
         for _, good, _m in await run_in_threadpool(devices.push_employee, emp):
             ok, err = ok + good, err + (not good)
-    db.audit(u["username"], "sincronizar todos")
+    db.audit(u["username"], "sincronizar todos", ", ".join(str(i) for i in args))
     flash(request, f"Sincronización terminada: {ok} correctas, {err} con error.", "success" if not err else "warning")
     return back("/empleados")
 
 
 @app.post("/empleados/importar-equipo")
 async def employees_import_device(request: Request):
-    u = user(request, "admin")
+    u = user(request, "admin", "encargado")
     f = await form(request)
-    dev = db.q1("SELECT * FROM devices WHERE id=?", (f.get("device_id"),))
-    if not dev:
-        flash(request, "Elige un equipo.", "danger")
+    dev = alcance.row(request, u, "devices", f.get("device_id")) if (f.get("device_id") or "").isdigit() else None
+    if not dev or dev["local_id"] is None:
+        flash(request, "Elige un equipo de tu local.", "danger")
         return back("/empleados")
     try:
         users = await run_in_threadpool(devices.client(dev).search_users)
     except ISAPIError as e:
         flash(request, str(e), "danger")
         return back("/empleados")
-    sched = db.q1("SELECT id FROM schedules ORDER BY id")
+    # Quedan en el local del equipo, con un horario de ese local; los N° que ya existen (en cualquier local) no se tocan
     n = 0
     for us in users:
-        if not db.q1("SELECT 1 FROM employees WHERE employee_no=?", (us["employeeNo"],)):
-            db.ex("INSERT INTO employees(employee_no, name, gender, schedule_id) VALUES (?,?,?,?)",
-                  (us["employeeNo"], us.get("name") or us["employeeNo"], us.get("gender", "unknown"),
-                   sched["id"] if sched else None))
+        no = str(us.get("employeeNo") or "").strip()
+        if no and not db.q1("SELECT 1 FROM employees WHERE employee_no=?", (no,)):
+            devices.add_from_device(dev, no, us.get("name") or no, us.get("gender", "unknown"))
             n += 1
     db.audit(u["username"], "importar del equipo", f"{dev['name']}: {n}")
     flash(request, f"Se importaron {n} empleados nuevos desde {dev['name']} ({len(users)} en el equipo). "
@@ -447,8 +563,13 @@ async def employees_import_device(request: Request):
 
 @app.post("/empleados/importar-excel")
 async def employees_import_excel(request: Request):
-    u = user(request, "admin")
+    u = user(request, "admin", "encargado")
     raw = await request.form()
+    # Local donde quedan los empleados nuevos y las áreas nuevas: el que se ve, o el elegido en el formulario
+    lid = int(raw["local_id"]) if str(raw.get("local_id") or "").isdigit() else alcance.default_local(request, u)
+    if lid is None or lid not in alcance.allowed(u):
+        flash(request, "Elige el local donde se importan los empleados.", "danger")
+        return back("/empleados")
     try:
         wb = load_workbook(io.BytesIO(await raw["file"].read()), read_only=True)
     except Exception:
@@ -466,42 +587,58 @@ async def employees_import_excel(request: Request):
     if c_no is None or c_name is None:
         flash(request, "El Excel debe tener columnas 'numero' y 'nombre'.", "danger")
         return back("/empleados")
-    sched = db.q1("SELECT id FROM schedules ORDER BY id")
-    n = 0
+    sched = devices.local_schedule(lid)
+    n, other = 0, []
     for r in rows[1:]:
         g = lambda c: (str(r[c]).strip() if c is not None and r[c] is not None else None)
         no, name = g(c_no), g(c_name)
         if not no or not name:
             continue
         no = no.removesuffix(".0")
+        cur = db.q1("SELECT id, local_id FROM employees WHERE employee_no=?", (no,))
+        if cur and not alcance.can_see(request, u, cur["local_id"]):
+            other.append(no)  # ese N° es de otro local: no se toca ni se dice de quién es
+            continue
+        # el área va en el local del empleado (si ya existía, el suyo; si es nuevo, el elegido)
+        elid = cur["local_id"] if cur and cur["local_id"] is not None else lid
         dep_id = None
         if g(c_dep):
-            db.ex("INSERT OR IGNORE INTO departments(name) VALUES (?)", (g(c_dep),))
-            dep_id = db.q1("SELECT id FROM departments WHERE name=?", (g(c_dep),))["id"]
-        if db.q1("SELECT 1 FROM employees WHERE employee_no=?", (no,)):
+            dep = db.q1("SELECT id FROM departments WHERE name=? COLLATE NOCASE AND local_id=?", (g(c_dep), elid))
+            dep_id = dep["id"] if dep else db.ex("INSERT INTO departments(name, local_id) VALUES (?,?)", (g(c_dep), elid))
+        if cur:
             db.ex("UPDATE employees SET name=?, document=COALESCE(?,document), department_id=COALESCE(?,department_id), "
-                  "position=COALESCE(?,position), email=COALESCE(?,email), phone=COALESCE(?,phone) WHERE employee_no=?",
-                  (name, g(c_doc), dep_id, g(c_pos), g(c_mail), g(c_tel), no))
+                  "position=COALESCE(?,position), email=COALESCE(?,email), phone=COALESCE(?,phone), "
+                  "local_id=COALESCE(local_id, ?) WHERE id=?",
+                  (name, g(c_doc), dep_id, g(c_pos), g(c_mail), g(c_tel), elid, cur["id"]))
         else:
-            db.ex("INSERT INTO employees(employee_no,name,document,department_id,position,email,phone,schedule_id) "
-                  "VALUES (?,?,?,?,?,?,?,?)", (no, name, g(c_doc), dep_id, g(c_pos), g(c_mail), g(c_tel),
-                                               sched["id"] if sched else None))
+            db.ex("INSERT INTO employees(employee_no,name,document,department_id,position,email,phone,schedule_id,local_id) "
+                  "VALUES (?,?,?,?,?,?,?,?,?)", (no, name, g(c_doc), dep_id, g(c_pos), g(c_mail), g(c_tel), sched, lid))
         n += 1
-    db.audit(u["username"], "importar excel", str(n))
+    db.audit(u["username"], "importar excel", f"{n} en local {lid}" + (f"; omitidos de otro local: {', '.join(other)}" if other else ""))
     flash(request, f"{n} empleados importados/actualizados. Usa 'Sincronizar todos' para enviarlos a los equipos.")
+    if other:
+        flash(request, f"{len(other)} N° no se importaron porque ya los usa otro local: {', '.join(other[:20])}. "
+                       f"El siguiente N° libre es {next_employee_no()}.", "warning")
     return back("/empleados")
 
 
 @app.get("/fotos/{name}")
 def photo(request: Request, name: str):
-    user(request)
-    p = db.PHOTOS_DIR / Path(name).name
+    u = user(request)
+    name = Path(name).name
+    # Solo la foto de un empleado que este usuario puede ver (el admin, cualquiera)
+    if not alcance.is_admin(u):
+        emp = db.q1("SELECT local_id FROM employees WHERE photo=?", (name,))
+        if not emp or not alcance.can_see(request, u, emp["local_id"]):
+            return Response(status_code=404)
+    p = db.PHOTOS_DIR / name
     return FileResponse(p) if p.exists() else Response(status_code=404)
 
 
 def _face_from_devices(emp):
-    """Trae la foto de rostro registrada en el equipo; si no hay, la última captura de una marcación."""
-    devs = db.q("SELECT * FROM devices WHERE active=1")
+    """Trae la foto de rostro registrada en el equipo; si no hay, la última captura de una marcación.
+    Primero mira los equipos de su local."""
+    devs = db.q("SELECT * FROM devices WHERE active=1 ORDER BY (local_id IS ?) DESC, id", (emp["local_id"],))
     for dev in devs:
         try:
             c = devices.client(dev)
@@ -524,8 +661,8 @@ def _face_from_devices(emp):
 @app.get("/empleados/{eid}/rostro")
 async def employee_face(request: Request, eid: int):
     """Foto del empleado: la del sistema o, si no tiene, la que está en el equipo (se guarda para la próxima)."""
-    user(request)
-    emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
+    u = user(request)
+    emp = alcance.row(request, u, "employees", eid)  # de otro local: como si no existiera
     if not emp:
         return Response(status_code=404)
     if emp["photo"] and (db.PHOTOS_DIR / emp["photo"]).exists():
@@ -544,21 +681,40 @@ async def employee_face(request: Request, eid: int):
 @app.get("/configuracion", response_class=HTMLResponse)
 def config(request: Request):
     u = user(request, "admin", "encargado")
-    return render(request, "config.html", u, departments=db.q("SELECT * FROM departments ORDER BY name"),
-                  sedes=sedes(),
-                  schedules=db.q("SELECT * FROM schedules ORDER BY name"),
-                  holidays=db.q("SELECT * FROM holidays ORDER BY date DESC"),
-                  settings={k: db.get_setting(k) for k in ("company", "poll_seconds", "min_gap_minutes")})
+    cl, al = alcance.sql(request, u, "local_id", include_null=True)
+    admin = alcance.is_admin(u)
+    return render(request, "config.html", u, departments=db.q(f"SELECT * FROM departments WHERE {cl} ORDER BY name", al),
+                  schedules=db.q(f"SELECT * FROM schedules WHERE {cl} ORDER BY name", al),
+                  local_names={r["id"]: r["name"] for r in db.q("SELECT id, name FROM locales")},
+                  new_local=alcance.default_local(request, u),
+                  holidays=db.q("SELECT * FROM holidays ORDER BY date DESC") if admin else [],
+                  settings={k: db.get_setting(k) for k in ("company", "poll_seconds", "min_gap_minutes")} if admin else {})
 
 
 @app.post("/configuracion/{what}")
 async def config_save(request: Request, what: str):
     u = user(request, "admin", "encargado")
     f = await form(request)
+
+    def denied(msg):
+        flash(request, msg, "danger")
+        return back("/configuracion")
+
+    # Feriados y ajustes generales valen para todos los locales: solo el admin
+    if what in ("feriado", "feriado-eliminar", "general") and not alcance.is_admin(u):
+        return denied("Solo el administrador puede cambiar feriados y ajustes generales.")
+    # Áreas y horarios: se crean en el local elegido y solo se tocan los de un local permitido
+    new_local = alcance.default_local(request, u)
+    if what in ("departamento", "horario") and not f.get("id") and not new_local:
+        return denied("Elige un local arriba en el menú.")
+    if what == "departamento-eliminar" and not alcance.row(request, u, "departments", f.get("id")):
+        return denied("Esa área no existe.")
+    if what in ("horario", "horario-eliminar") and f.get("id") and not alcance.row(request, u, "schedules", f["id"]):
+        return denied("Ese horario no existe.")
     if what == "departamento" and f.get("name"):
-        db.ex("INSERT OR IGNORE INTO departments(name, sede) VALUES (?,?)", (f["name"], f.get("sede") or None))
-    elif what == "departamento-sede" and f.get("id"):
-        db.ex("UPDATE departments SET sede=? WHERE id=?", (f.get("sede") or None, f["id"]))
+        if db.q1("SELECT 1 FROM departments WHERE local_id=? AND lower(trim(name))=lower(?)", (new_local, f["name"])):
+            return denied(f"Ya existe el área «{f['name']}» en este local.")
+        db.ex("INSERT INTO departments(name, local_id) VALUES (?,?)", (f["name"], new_local))
     elif what == "departamento-eliminar":
         db.ex("UPDATE employees SET department_id=NULL WHERE department_id=?", (f["id"],))
         db.ex("DELETE FROM departments WHERE id=?", (f["id"],))
@@ -588,8 +744,8 @@ async def config_save(request: Request, what: str):
             db.ex("""UPDATE schedules SET name=?, start_time=?, end_time=?, tolerance_min=?, lunch_min=?, days=?,
                      in_from=?, in_to=?, out_from=?, out_to=? WHERE id=?""", vals + (f["id"],))
         else:
-            db.ex("""INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days,in_from,in_to,out_from,out_to)
-                     VALUES (?,?,?,?,?,?,?,?,?,?)""", vals)
+            db.ex("""INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days,in_from,in_to,out_from,out_to,
+                     local_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", vals + (new_local,))
     elif what == "horario-eliminar":
         db.ex("UPDATE employees SET schedule_id=NULL WHERE schedule_id=?", (f["id"],))
         db.ex("DELETE FROM schedules WHERE id=?", (f["id"],))
@@ -653,10 +809,11 @@ async def backup_restore(request: Request):
 @app.get("/permisos", response_class=HTMLResponse)
 def leaves(request: Request):
     u = user(request, "admin", "encargado")
-    rows = db.q("""SELECT l.*, e.name, e.employee_no FROM leaves l JOIN employees e ON e.id=l.employee_id
-                   ORDER BY l.date_from DESC LIMIT 300""")
+    ce, ae = alcance.sql(request, u, "e.local_id", include_null=True)
+    rows = db.q(f"""SELECT l.*, e.name, e.employee_no FROM leaves l JOIN employees e ON e.id=l.employee_id
+                    WHERE {ce} ORDER BY l.date_from DESC LIMIT 300""", ae)
     return render(request, "leaves.html", u, rows=rows, kinds=LEAVE_KINDS,
-                  emps=db.q("SELECT id, name, employee_no FROM employees WHERE active=1 ORDER BY name"))
+                  emps=db.q(f"SELECT id, name, employee_no FROM employees e WHERE active=1 AND {ce} ORDER BY name", ae))
 
 
 @app.post("/permisos")
@@ -664,7 +821,14 @@ async def leave_save(request: Request):
     u = user(request, "admin", "encargado")
     f = await form(request)
     if f.get("delete"):
+        lv = db.q1("SELECT * FROM leaves WHERE id=?", (f["delete"],))
+        if not lv or not alcance.row(request, u, "employees", lv["employee_id"]):
+            flash(request, "Ese permiso no existe.", "danger")
+            return back("/permisos")
         db.ex("DELETE FROM leaves WHERE id=?", (f["delete"],))
+    elif f.get("employee_id") and not alcance.row(request, u, "employees", f["employee_id"]):
+        flash(request, "Ese empleado no existe.", "danger")
+        return back("/permisos")
     elif f.get("employee_id") and f.get("date_from"):
         if (f.get("date_to") or f["date_from"]) < f["date_from"]:
             flash(request, "La fecha «hasta» no puede ser anterior a «desde».", "danger")
@@ -682,18 +846,21 @@ async def leave_save(request: Request):
 def attendance_day(request: Request, fecha: str = "", dep: str = ""):
     u = user(request)
     d = attendance.parse_date(fecha, date.today())
-    rows = attendance.compute(d, d, department_id=dep or None)
+    rows = attendance.compute(d, d, department_id=dep or None, locales=emp_locales(request, u))
+    cl, al = alcance.sql(request, u, "local_id", include_null=True)
     return render(request, "attendance.html", u, rows=rows, d=d, dep=dep, prev=d - timedelta(days=1),
-                  next=d + timedelta(days=1), departments=db.q("SELECT * FROM departments ORDER BY name"),
-                  emps=db.q("SELECT id, name, employee_no FROM employees WHERE active=1 ORDER BY name"))
+                  next=d + timedelta(days=1), departments=db.q(f"SELECT * FROM departments WHERE {cl} ORDER BY name", al),
+                  emps=db.q(f"SELECT id, name, employee_no FROM employees WHERE active=1 AND {cl} ORDER BY name", al))
 
 
 @app.post("/asistencia/manual")
 async def manual_mark(request: Request):
     u = user(request, "admin", "encargado")
     f = await form(request)
-    emp = db.q1("SELECT * FROM employees WHERE id=?", (f.get("employee_id"),))
-    if emp and f.get("date") and f.get("time"):
+    emp = alcance.row(request, u, "employees", f.get("employee_id"))
+    if not emp:
+        flash(request, "Ese empleado no existe.", "danger")
+    elif f.get("date") and f.get("time"):
         t = f"{f['date']}T{f['time']}:00"
         db.ex("""INSERT INTO events(device_id, serial_no, event_time, employee_no, name, major, minor, verify_mode,
                  attendance_status, valid, source) VALUES (NULL, NULL, ?, ?, ?, 0, 0, 'manual', ?, 1, 'manual')""",
@@ -710,26 +877,36 @@ def events(request: Request, desde: str = "", hasta: str = "", emp: str = "", de
     d2 = attendance.parse_date(hasta, d1)
     where, args = ["ev.event_time >= ?", "ev.event_time < ?"], [d1.isoformat(), (d2 + timedelta(days=1)).isoformat()]
     if emp:
+        # solo se filtra por un empleado que este usuario puede ver
         where.append("ev.employee_no=?")
-        args.append(emp)
+        args.append(emp if alcance.employee_by_no(request, u, emp) else None)
     if dev:
         where.append("ev.device_id=?")
         args.append(dev)
     if not todos:
         where.append("ev.employee_no IS NOT NULL")
-    rows = db.q(f"""SELECT ev.*, e.name AS emp_name, e.id AS emp_id, d.name AS device, d.sede AS dev_sede,
-                    dp.sede AS dep_sede, dp.name AS department, s.in_from, s.in_to, s.out_from, s.out_to FROM events ev
-                    LEFT JOIN employees e ON e.employee_no=ev.employee_no LEFT JOIN devices d ON d.id=ev.device_id
-                    LEFT JOIN departments dp ON dp.id=e.department_id
-                    LEFT JOIN schedules s ON s.id=e.schedule_id
-                    WHERE {' AND '.join(where)} ORDER BY ev.event_time DESC LIMIT 1000""", args)
-    roles = attendance.mark_roles(d1, d2)
-    for ev in _mark_away(rows):
+    rows = visible_events(request, u, where, args, 1000, ", s.in_from, s.in_to, s.out_from, s.out_to",
+                          "LEFT JOIN schedules s ON s.id=e.schedule_id")
+    roles = attendance.mark_roles(d1, d2, locales=emp_locales(request, u))
+    for ev in rows:
         ev["counts_as"] = (roles.get((ev["employee_no"], datetime.fromisoformat(ev["event_time"])), "No cuenta")
-                           if ev["valid"] else "")
+                           if ev["valid"] and not ev.get("other") else "")
+    cl, al = alcance.sql(request, u, "local_id", include_null=True)
     return render(request, "events.html", u, rows=rows, desde=d1, hasta=d2, emp=emp, dev=dev, todos=todos,
-                  emps=db.q("SELECT name, employee_no FROM employees ORDER BY name"),
-                  devs=db.q("SELECT id, name FROM devices ORDER BY name"))
+                  emps=db.q(f"SELECT name, employee_no FROM employees WHERE {cl} ORDER BY name", al),
+                  devs=db.q(f"SELECT id, name FROM devices WHERE {cl} ORDER BY name", al))
+
+
+def event_visible(request, u, ev) -> bool:
+    """¿Puede este usuario ver quién hizo esta marca? Lo decide el local del empleado; si la marca no es de
+    ningún empleado registrado, el local del equipo."""
+    if alcance.is_admin(u):
+        return True
+    emp = db.q1("SELECT local_id FROM employees WHERE employee_no=?", (ev["employee_no"],)) if ev["employee_no"] else None
+    if emp:
+        return alcance.can_see(request, u, emp["local_id"])
+    dev = db.q1("SELECT local_id FROM devices WHERE id=?", (ev["device_id"],)) if ev["device_id"] else None
+    return bool(dev) and alcance.can_see(request, u, dev["local_id"])
 
 
 @app.post("/eventos/{evid}/eliminar")
@@ -737,7 +914,7 @@ async def event_delete(request: Request, evid: int):
     """Solo se pueden borrar las marcas manuales; las del equipo son el registro original."""
     u = user(request, "admin", "encargado")
     ev = db.q1("SELECT * FROM events WHERE id=? AND source='manual'", (evid,))
-    if ev:
+    if ev and event_visible(request, u, ev):
         db.ex("DELETE FROM events WHERE id=?", (evid,))
         db.audit(u["username"], "borrar marca manual", f"{ev['employee_no']} {ev['event_time']} {ev['attendance_status']}")
         flash(request, "Marca manual borrada.")
@@ -746,8 +923,10 @@ async def event_delete(request: Request, evid: int):
 
 @app.get("/eventos/{evid}/foto")
 async def event_photo(request: Request, evid: int):
-    user(request)
+    u = user(request)
     ev = db.q1("SELECT * FROM events WHERE id=?", (evid,))
+    if ev and not event_visible(request, u, ev):
+        return Response(status_code=404)
     dev = db.q1("SELECT * FROM devices WHERE id=?", (ev["device_id"],)) if ev else None
     if not dev or not ev["picture_url"]:
         return Response(status_code=404)
@@ -760,28 +939,32 @@ async def event_photo(request: Request, evid: int):
 
 
 # ------------------------------------------------------------------ reportes
-def report_args(desde, hasta, emp, dep):
+def report_args(request, u, desde, hasta, emp, dep):
+    """Filas del reporte, solo de los empleados de los locales que se ven ahora."""
     today = date.today()
     d1 = attendance.parse_date(desde, today.replace(day=1))
     d2 = attendance.parse_date(hasta, today)
-    rows = attendance.compute(d1, d2, employee_id=emp or None, department_id=dep or None)
+    rows = attendance.compute(d1, d2, employee_id=emp or None, department_id=dep or None,
+                              locales=emp_locales(request, u))
     return d1, d2, rows, attendance.summarize(rows)
 
 
 @app.get("/reportes", response_class=HTMLResponse)
 def report(request: Request, desde: str = "", hasta: str = "", emp: str = "", dep: str = "", vista: str = "resumen"):
     u = user(request)
-    d1, d2, rows, summary = report_args(desde, hasta, emp, dep)
+    d1, d2, rows, summary = report_args(request, u, desde, hasta, emp, dep)
+    cl, al = alcance.sql(request, u, "local_id", include_null=True)
     return render(request, "reports.html", u, d1=d1, d2=d2, emp=emp, dep=dep, vista=vista, rows=rows,
-                  summary=summary, departments=db.q("SELECT * FROM departments ORDER BY name"),
-                  emps=db.q("SELECT id, name FROM employees ORDER BY name"), qs=request.url.query)
+                  summary=summary, departments=db.q(f"SELECT * FROM departments WHERE {cl} ORDER BY name", al),
+                  emps=db.q(f"SELECT id, name FROM employees WHERE {cl} ORDER BY name", al), qs=request.url.query)
 
 
 @app.get("/reportes/exportar.{fmt}")
 def report_export(request: Request, fmt: str, desde: str = "", hasta: str = "", emp: str = "", dep: str = ""):
     u = user(request)
-    d1, d2, rows, summary = report_args(desde, hasta, emp, dep)
-    title = "Reporte de asistencia"
+    d1, d2, rows, summary = report_args(request, u, desde, hasta, emp, dep)
+    loc = alcance.current(request, u)
+    title = "Reporte de asistencia" + (f" — {loc['name']}" if loc else "")
     period = f"Del {d1.strftime('%d/%m/%Y')} al {d2.strftime('%d/%m/%Y')}"
     fname = f"asistencia_{d1.isoformat()}_{d2.isoformat()}"
     db.audit(u["username"], f"exportar {fmt}", period)
@@ -794,12 +977,37 @@ def report_export(request: Request, fmt: str, desde: str = "", hasta: str = "", 
 
 
 # ------------------------------------------------------------------ dispositivos
+def _devices_page(request, u, **ctx):
+    """Página de equipos: solo los de los locales que se ven ahora. La clave del equipo nunca va a la página,
+    y el usuario del equipo solo a quien puede editarlo."""
+    cond, args = alcance.sql(request, u, "d.local_id", include_null=True)
+    devs = db.q(f"""SELECT d.*, l.name AS local, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
+                    FROM devices d LEFT JOIN locales l ON l.id=d.local_id WHERE {cond} ORDER BY l.name, d.name""", args)
+    can_edit = u["role"] in alcance.EDIT_ROLES
+    for d in devs:
+        d.pop("password", None)
+        if not can_edit:
+            d.pop("username", None)
+    # «Revisar empleados entre equipos»: solo entre equipos de un mismo local con 2 o más activos
+    per_local = defaultdict(list)
+    for d in devs:
+        if d["active"] and d["local_id"] is not None:
+            per_local[(d["local_id"], d["local"])].append(d)
+    compare_locals = [{"id": k[0], "name": k[1]} for k, v in per_local.items() if len(v) > 1]
+    return render(request, "devices.html", u, devs=devs, can_edit=can_edit, compare_locals=compare_locals,
+                  local_opts=alcance.choices(u) if can_edit else [],
+                  default_local=alcance.default_local(request, u), **ctx)
+
+
+def _device_visible(request, u, did):
+    """El equipo si este usuario puede verlo (su local); si no, None (se trata como inexistente)."""
+    return alcance.row(request, u, "devices", did)
+
+
 @app.get("/dispositivos", response_class=HTMLResponse)
 def device_list(request: Request):
     u = user(request)
-    devs = db.q("""SELECT d.*, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
-                   FROM devices d ORDER BY d.name""")
-    return render(request, "devices.html", u, devs=devs, sedes=sedes())
+    return _devices_page(request, u)
 
 
 @app.post("/dispositivos/buscar")
@@ -815,41 +1023,54 @@ async def device_search(request: Request):
                        "Revisa que esté encendido y conectado al mismo router/switch que esta PC.", "warning")
     db.audit(u["username"], "buscar equipos en la red", ", ".join(f["ip"] for f in found))
     poller.wake.set()
-    devs = db.q("""SELECT d.*, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
-                   FROM devices d ORDER BY d.name""")
-    return render(request, "devices.html", u, devs=devs, found=found, nets=nets, searched=True, sedes=sedes())
+    return _devices_page(request, u, found=found, nets=nets, searched=True)
+
+
+def _compare_local(request, u, value):
+    """Local cuyos equipos se comparan: el indicado (si es suyo) o el que se está viendo."""
+    lid = int(value) if str(value or "").isdigit() else alcance.default_local(request, u)
+    return lid if lid is not None and lid in alcance.allowed(u) else None
 
 
 @app.get("/dispositivos/comparar", response_class=HTMLResponse)
-async def device_compare(request: Request):
-    """Con dos o más biométricos: revisa que cada persona tenga el mismo N° y su rostro en todos."""
-    u = user(request, "admin")
-    cdevs, rows, errors = await run_in_threadpool(devices.compare_users)
-    devs = db.q("""SELECT d.*, (SELECT COUNT(*) FROM events ev WHERE ev.device_id=d.id) AS n_events
-                   FROM devices d ORDER BY d.name""")
-    names = {d["id"]: d["name"] for d in devs}
-    return render(request, "devices.html", u, devs=devs, sedes=sedes(), compared=True, cdevs=cdevs, crows=rows,
-                  cerrors={names.get(k, k): v for k, v in errors.items()})
+async def device_compare(request: Request, local: str = ""):
+    """Con dos o más biométricos en un local: revisa que cada persona tenga el mismo N° y su rostro en todos."""
+    u = user(request, "admin", "encargado")
+    lid = _compare_local(request, u, local)
+    if lid is None:
+        flash(request, "Elige de qué local revisar los equipos.", "warning")
+        return back("/dispositivos")
+    ids = [d["id"] for d in devices.local_devices(lid)]
+    cdevs, rows, errors = await run_in_threadpool(devices.compare_users, ids)
+    names = {d["id"]: d["name"] for d in devices.local_devices(lid)}
+    return _devices_page(request, u, compared=True, compare_local=lid, cdevs=cdevs, crows=rows,
+                         cerrors={names.get(k, k): v for k, v in errors.items()})
 
 
 @app.post("/dispositivos/copiar")
 async def device_copy(request: Request):
-    u = user(request, "admin")
-    nos = [v for k, v in (await request.form()).multi_items() if k == "no"]
-    done, msgs = await run_in_threadpool(devices.copy_to_missing, nos)
-    db.audit(u["username"], "copiar rostros entre equipos", ", ".join(nos))
+    u = user(request, "admin", "encargado")
+    raw = await request.form()
+    lid = _compare_local(request, u, raw.get("local"))
+    if lid is None:
+        flash(request, "Elige de qué local copiar los rostros.", "warning")
+        return back("/dispositivos")
+    nos = [v for k, v in raw.multi_items() if k == "no"]
+    ids = [d["id"] for d in devices.local_devices(lid)]
+    done, msgs = await run_in_threadpool(devices.copy_to_missing, nos, ids)
+    db.audit(u["username"], "copiar rostros entre equipos", f"local {lid}: " + ", ".join(nos))
     if done:
         flash(request, f"Se copiaron {done} rostros a los equipos donde faltaban.")
     for m in msgs[:8]:
         flash(request, m, "warning")
-    return back("/dispositivos/comparar")
+    return back(f"/dispositivos/comparar?local={lid}")
 
 
 @app.get("/dispositivos/{did}/rostro/{no}")
 async def device_face(request: Request, did: int, no: str):
     """Foto del rostro guardado en ese equipo para ese N° (para comparar entre equipos)."""
-    user(request, "admin")
-    dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
+    u = user(request, "admin", "encargado")
+    dev = _device_visible(request, u, did)
     if not dev:
         return Response(status_code=404)
 
@@ -868,35 +1089,53 @@ async def device_face(request: Request, did: int, no: str):
 
 @app.post("/dispositivos/guardar")
 async def device_save(request: Request):
-    u = user(request, "admin")
+    u = user(request, "admin", "encargado")
     f = await form(request)
-    if not (f.get("port") or "80").isdigit() or not f.get("host") or not f.get("name"):
-        flash(request, "Revisa los datos del equipo: nombre, IP y puerto (número) son obligatorios.", "danger")
+    if not (f.get("port") or "80").isdigit() or not f.get("host") or not f.get("name") or not f.get("username"):
+        flash(request, "Revisa los datos del equipo: nombre, IP, puerto (número) y usuario son obligatorios.", "danger")
+        return back("/dispositivos")
+    old = None
+    if f.get("id"):
+        old = _device_visible(request, u, f["id"]) if f["id"].isdigit() else None
+        if not old:
+            flash(request, "Ese equipo no existe o es de otro local.", "danger")
+            return back("/dispositivos")
+    # Local del equipo: el elegido (solo uno de los suyos), o el que ya tenía, o el que se está viendo
+    lid = int(f["local_id"]) if (f.get("local_id") or "").isdigit() else (
+        old["local_id"] if old else alcance.default_local(request, u))
+    if lid is None or lid not in alcance.allowed(u):
+        flash(request, "Elige el local donde está el equipo (solo puedes usar tus locales).", "danger")
         return back("/dispositivos")
     host, port = f["host"].strip().lower(), int(f.get("port") or 80)
     vals = [f["name"], host, port, 1 if f.get("https") else 0, f["username"],
             devices.local_offset(), int(f.get("door_no") or 1), f.get("direction") or "ambos",
-            1 if f.get("active") else 0, (f.get("sede") or "").strip() or None]
+            1 if f.get("active") else 0, lid]
     # Un equipo se identifica por IP + puerto: nunca se registra dos veces
-    same = db.q1("SELECT id, name FROM devices WHERE host=? AND port=? AND id<>?", (host, port, f.get("id") or 0))
-    if same and f.get("id"):
+    same = db.q1("SELECT id, name, local_id FROM devices WHERE host=? AND port=? AND id<>?",
+                 (host, port, old["id"] if old else 0))
+    if same and not alcance.can_see(request, u, same["local_id"]):
+        # es de otro local: no se toca ni se dice cuál es
+        flash(request, f"La dirección {host}:{port} ya está registrada en otro local. Pídele al administrador que lo revise.",
+              "danger")
+        return back("/dispositivos")
+    if same and old:
         flash(request, f"La dirección {host}:{port} ya es del equipo «{same['name']}».", "danger")
         return back("/dispositivos")
     if same:
-        f["id"] = str(same["id"])
+        old = same
         vals[-2] = 1
         flash(request, f"El equipo {host}:{port} ya estaba registrado como «{same['name']}»: se actualizaron "
                        "sus datos en lugar de crear otro.", "info")
-    if f.get("id"):
+    if old:
         db.ex("""UPDATE devices SET name=?, host=?, port=?, https=?, username=?, tz_offset=?, door_no=?, direction=?,
-                 active=?, sede=? WHERE id=?""", vals + [f["id"]])
+                 active=?, local_id=? WHERE id=?""", vals + [old["id"]])
         if f.get("password"):
-            db.ex("UPDATE devices SET password=? WHERE id=?", (f["password"], f["id"]))
-        did = int(f["id"])
+            db.ex("UPDATE devices SET password=? WHERE id=?", (f["password"], old["id"]))
+        did = old["id"]
     else:
         did = db.ex("""INSERT INTO devices(name, host, port, https, username, tz_offset, door_no, direction, active,
-                       sede, password) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", vals + [f.get("password", "")])
-    db.audit(u["username"], "guardar dispositivo", f"{f['name']} {f['host']}")
+                       local_id, password) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", vals + [f.get("password", "")])
+    db.audit(u["username"], "guardar dispositivo", f"{f['name']} {f['host']} (local {lid})")
     dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
     poller.wake.set()
     try:
@@ -910,13 +1149,22 @@ async def device_save(request: Request):
 
 @app.post("/dispositivos/{did}/{action}")
 async def device_action(request: Request, did: int, action: str):
-    u = user(request, "admin")
-    dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
+    u = user(request, "admin", "encargado")
+    dev = _device_visible(request, u, did)
     if not dev:
-        flash(request, "Ese equipo ya no existe.", "danger")
+        flash(request, "Ese equipo no existe o es de otro local.", "danger")
         return back("/dispositivos")
     c = devices.client(dev)
     try:
+        if action == "ip" and not alcance.is_admin(u):
+            # cambiar a la IP de un equipo de otro local lo uniría con ese registro: solo el admin
+            f = await form(request)
+            host, _, port = (f.get("host") or "").strip().partition(":")
+            other = db.q1("SELECT local_id FROM devices WHERE host=? AND id<>?", (host.lower(), did))
+            if other and not alcance.can_see(request, u, other["local_id"]):
+                flash(request, f"La IP {host} ya está registrada en otro local. Pídele al administrador que lo revise.",
+                      "danger")
+                return back("/dispositivos")
         if action == "probar":
             info = await run_in_threadpool(devices.refresh_info, dev)
             n = await run_in_threadpool(c.user_count)
@@ -963,18 +1211,57 @@ async def device_action(request: Request, did: int, action: str):
 @app.get("/usuarios", response_class=HTMLResponse)
 def users(request: Request):
     u = user(request, "admin")
-    return render(request, "users.html", u, users=db.q("SELECT * FROM users ORDER BY username"),
+    rows = db.q("SELECT * FROM users ORDER BY username")
+    mine = defaultdict(list)
+    for r in db.q("SELECT ul.user_id, ul.local_id FROM user_locales ul JOIN locales l ON l.id=ul.local_id WHERE l.active=1"):
+        mine[r["user_id"]].append(r["local_id"])
+    for r in rows:
+        r["locales"] = mine[r["id"]]
+        r["sin_local"] = r["role"] != "admin" and not r["locales"]
+    return render(request, "users.html", u, users=rows, locales=db.q("SELECT * FROM locales WHERE active=1 ORDER BY name"),
                   log=db.q("SELECT * FROM audit ORDER BY id DESC LIMIT 200"))
+
+
+def user_locales_from(fd):
+    """Locales activos marcados en el formulario de usuario (casillas name=locales)."""
+    ok = {r["id"] for r in db.q("SELECT id FROM locales WHERE active=1")}
+    out = set()
+    for v in fd.getlist("locales"):
+        try:
+            if int(v) in ok:
+                out.add(int(v))
+        except ValueError:
+            pass
+    return sorted(out)
+
+
+def set_user_locales(uid, role, lids):
+    """Guarda los locales del usuario. El admin ve todos: no se le guarda ninguno.
+    Los locales inactivos que ya tenía se conservan (por si se vuelven a activar)."""
+    with db.tx() as c:
+        c.execute("DELETE FROM user_locales WHERE user_id=? AND local_id IN (SELECT id FROM locales WHERE active=1)", (uid,))
+        if role == "admin":
+            c.execute("DELETE FROM user_locales WHERE user_id=?", (uid,))
+        else:
+            c.executemany("INSERT OR IGNORE INTO user_locales(user_id, local_id) VALUES (?,?)", [(uid, lid) for lid in lids])
 
 
 @app.post("/usuarios")
 async def user_save(request: Request):
     u = user(request, "admin")
     f = await form(request)
-    if f.get("role", "consulta") not in ROLES:
+    lids = user_locales_from(await request.form())
+    f.setdefault("role", "consulta")
+    if f["role"] not in ROLES:
         flash(request, "Rol no válido.", "danger")
         return back("/usuarios")
+    if f["role"] != "admin" and not lids:
+        flash(request, f"Marca al menos un local para el usuario con rol «{ROLES[f['role']]}».", "danger")
+        return back("/usuarios")
     if f.get("id"):
+        if not db.q1("SELECT 1 FROM users WHERE id=?", (f["id"],)):
+            flash(request, "Ese usuario ya no existe.", "danger")
+            return back("/usuarios")
         if int(f["id"]) == u["id"] and (f.get("role") != "admin" or not f.get("active")):
             flash(request, "No puedes quitarte el rol de administrador ni desactivarte.", "danger")
             return back("/usuarios")
@@ -995,8 +1282,184 @@ async def user_save(request: Request):
         if db.q1("SELECT 1 FROM users WHERE username=?", (f["username"],)):
             flash(request, "Ese nombre de usuario ya existe.", "danger")
             return back("/usuarios")
-        db.ex("INSERT INTO users(username, full_name, password_hash, role) VALUES (?,?,?,?)",
-              (f["username"], f.get("full_name"), db.hash_password(f["password"]), f.get("role", "consulta")))
-    db.audit(u["username"], "guardar usuario", f.get("username") or f.get("id"))
+        f["id"] = db.ex("INSERT INTO users(username, full_name, password_hash, role) VALUES (?,?,?,?)",
+                        (f["username"], f.get("full_name"), db.hash_password(f["password"]), f["role"]))
+    set_user_locales(int(f["id"]), f["role"], lids)
+    names = [r["name"] for r in db.q(f"SELECT name FROM locales WHERE id IN ({','.join('?' * len(lids))}) ORDER BY name", lids)] if lids else []
+    who = f.get("username") or (db.q1("SELECT username FROM users WHERE id=?", (f["id"],)) or {}).get("username")
+    db.audit(u["username"], "guardar usuario",
+             f"{who} · {ROLES[f['role']]}" + ("" if f["role"] == "admin" else f" · locales: {', '.join(names)}"))
     flash(request, "Usuario guardado.")
     return back("/usuarios")
+
+
+# ------------------------------------------------------------------ locales (solo admin)
+NULL_LABELS = {"devices": "biométricos", "departments": "áreas", "employees": "empleados", "schedules": "horarios"}
+
+
+def users_without_local():
+    """Usuarios activos que no son admin y no tienen ningún local activo: no pueden ver nada."""
+    return db.q("""SELECT username FROM users u WHERE u.active=1 AND u.role!='admin' AND NOT EXISTS (
+                       SELECT 1 FROM user_locales ul JOIN locales l ON l.id=ul.local_id WHERE ul.user_id=u.id AND l.active=1)
+                   ORDER BY username""")
+
+
+@app.get("/locales", response_class=HTMLResponse)
+def locales_page(request: Request):
+    u = user(request, "admin")
+    rows = db.q("""SELECT l.*,
+        (SELECT COUNT(*) FROM devices d WHERE d.local_id=l.id) dev_total,
+        (SELECT COUNT(*) FROM devices d WHERE d.local_id=l.id AND d.active=1 AND d.online=1) dev_online,
+        (SELECT COUNT(*) FROM employees e WHERE e.local_id=l.id AND e.active=1) emps,
+        (SELECT COUNT(*) FROM departments a WHERE a.local_id=l.id) areas,
+        (SELECT COUNT(*) FROM user_locales ul JOIN users x ON x.id=ul.user_id
+          WHERE ul.local_id=l.id AND x.active=1 AND x.role!='admin') users
+        FROM locales l ORDER BY l.active DESC, l.name""")
+    nulls = {NULL_LABELS[t]: n for t in db.LOCAL_TABLES
+             if (n := db.q1(f"SELECT COUNT(*) n FROM {t} WHERE local_id IS NULL")["n"])}
+    return render(request, "locales.html", u, locales=rows, nulls=nulls, sin_local=users_without_local(),
+                  devs=db.q("SELECT id, name, host, port, local_id, online, active FROM devices ORDER BY name"),
+                  areas=db.q("""SELECT a.id, a.name, a.local_id,
+                                (SELECT COUNT(*) FROM employees e WHERE e.department_id=a.id) emps
+                                FROM departments a ORDER BY a.name"""),
+                  emps=db.q("""SELECT e.id, e.employee_no, e.name, e.local_id, e.active, a.name area
+                               FROM employees e LEFT JOIN departments a ON a.id=e.department_id
+                               ORDER BY e.active DESC, e.name"""))
+
+
+@app.post("/locales")
+async def locales_save(request: Request):
+    u, f = user(request, "admin"), await form(request)
+    action, name = f.get("action"), " ".join(f.get("name", "").split())[:60]
+    loc = db.q1("SELECT * FROM locales WHERE id=?", (f.get("id"),)) if f.get("id") else None
+    if action in ("crear", "renombrar"):
+        if not name:
+            flash(request, "Escribe el nombre del local.", "danger")
+        elif db.q1("SELECT 1 FROM locales WHERE name=? COLLATE NOCASE AND id!=?", (name, loc["id"] if loc else 0)):
+            flash(request, f"Ya existe un local llamado «{name}».", "danger")
+        elif action == "crear":
+            db.ex("INSERT INTO locales(name) VALUES (?)", (name,))
+            db.audit(u["username"], "crear local", name)
+            flash(request, f"Local «{name}» creado. Ahora puedes moverle biométricos, áreas y empleados abajo.")
+        elif loc:
+            db.ex("UPDATE locales SET name=? WHERE id=?", (name, loc["id"]))
+            db.audit(u["username"], "renombrar local", f"{loc['name']} → {name}")
+            flash(request, f"Local renombrado a «{name}».")
+    elif action in ("activar", "desactivar") and loc:
+        if action == "desactivar":
+            if loc["active"] and db.q1("SELECT COUNT(*) n FROM locales WHERE active=1")["n"] <= 1:
+                flash(request, "No se puede desactivar el último local activo.", "danger")
+                return back("/locales")
+            db.ex("UPDATE locales SET active=0 WHERE id=?", (loc["id"],))
+            flash(request, f"Local «{loc['name']}» desactivado: nadie lo ve en el menú; sus datos se conservan.", "warning")
+        else:
+            db.ex("UPDATE locales SET active=1 WHERE id=?", (loc["id"],))
+            flash(request, f"Local «{loc['name']}» activado.")
+        db.audit(u["username"], f"{action} local", loc["name"])
+        if left := users_without_local():
+            flash(request, "Quedan usuarios sin ningún local activo: " + ", ".join(x["username"] for x in left)
+                  + ". Asígnales uno en Usuarios.", "warning")
+    else:
+        flash(request, "Acción no válida.", "danger")
+    return back("/locales")
+
+
+@app.post("/locales/mover")
+async def locales_move(request: Request):
+    """Revisar reparto: pasa un biométrico, un área (con su gente) o varios empleados a otro local."""
+    u, f = user(request, "admin"), await form(request)
+    what = f.get("que")
+    dest = db.q1("SELECT * FROM locales WHERE id=?", (f.get("destino") or 0,))
+    if not dest:
+        flash(request, "Elige el local de destino.", "danger")
+        return back("/locales#reparto")
+    lname = lambda lid: (db.q1("SELECT name FROM locales WHERE id=?", (lid,)) or {"name": "sin local"})["name"]
+    if what == "dispositivo":
+        dev = db.q1("SELECT * FROM devices WHERE id=?", (f.get("id") or 0,))
+        if not dev:
+            flash(request, "Ese biométrico ya no existe.", "danger")
+        elif dev["local_id"] != dest["id"]:
+            db.ex("UPDATE devices SET local_id=? WHERE id=?", (dest["id"], dev["id"]))
+            db.audit(u["username"], "mover biométrico de local", f"{dev['name']}: {lname(dev['local_id'])} → {dest['name']}")
+            flash(request, f"Biométrico «{dev['name']}» ahora es de {dest['name']}.")
+        return back("/locales#reparto")
+    if what == "area":
+        area = db.q1("SELECT * FROM departments WHERE id=?", (f.get("id") or 0,))
+        if not area:
+            flash(request, "Esa área ya no existe.", "danger")
+            return back("/locales#reparto")
+        if area["local_id"] == dest["id"]:
+            return back("/locales#reparto")
+        if db.q1("SELECT 1 FROM departments WHERE local_id=? AND name=? COLLATE NOCASE AND id!=?",
+                 (dest["id"], area["name"], area["id"])):
+            flash(request, f"{dest['name']} ya tiene un área llamada «{area['name']}». Cambia el nombre de una de las dos antes de moverla.", "danger")
+            return back("/locales#reparto")
+        with db.tx() as c:
+            c.execute("UPDATE departments SET local_id=? WHERE id=?", (dest["id"], area["id"]))
+            n = c.execute("UPDATE employees SET local_id=? WHERE department_id=?", (dest["id"], area["id"])).rowcount
+            # el horario es de cada local: si el que tenían no es del nuevo local, se les quita
+            lost = c.execute("""UPDATE employees SET schedule_id=NULL WHERE department_id=? AND schedule_id IS NOT NULL
+                                AND schedule_id NOT IN (SELECT id FROM schedules WHERE local_id=?)""",
+                             (area["id"], dest["id"])).rowcount
+        db.audit(u["username"], "mover área de local",
+                 f"{area['name']} ({n} empleados): {lname(area['local_id'])} → {dest['name']}" + (f"; {lost} sin horario" if lost else ""))
+        flash(request, f"Área «{area['name']}» y sus {n} empleados ahora son de {dest['name']}.")
+        if lost:
+            flash(request, f"{lost} de esos empleados quedaron sin horario (el suyo era de otro local). "
+                           f"Asígnales un horario de {dest['name']} en Empleados.", "warning")
+        return back("/locales#reparto")
+    if what == "empleados":
+        eids = []
+        for v in (await request.form()).getlist("ids"):
+            try:
+                eids.append(int(v))
+            except ValueError:
+                pass
+        rows = db.q(f"SELECT id, name, local_id FROM employees WHERE id IN ({','.join('?' * len(eids))})", eids) if eids else []
+        rows = [r for r in rows if r["local_id"] != dest["id"]]
+        if not rows:
+            flash(request, "Marca al menos un empleado de otro local para mover.", "warning")
+            return back("/locales#reparto")
+        ids_ = [r["id"] for r in rows]
+        marks = ",".join("?" * len(ids_))
+        with db.tx() as c:
+            c.execute(f"UPDATE employees SET local_id=? WHERE id IN ({marks})", [dest["id"]] + ids_)
+            no_area = c.execute(f"""UPDATE employees SET department_id=NULL WHERE id IN ({marks}) AND department_id IS NOT NULL
+                                    AND department_id NOT IN (SELECT id FROM departments WHERE local_id=?)""",
+                                ids_ + [dest["id"]]).rowcount
+            no_sched = c.execute(f"""UPDATE employees SET schedule_id=NULL WHERE id IN ({marks}) AND schedule_id IS NOT NULL
+                                     AND schedule_id NOT IN (SELECT id FROM schedules WHERE local_id=?)""",
+                                 ids_ + [dest["id"]]).rowcount
+            pending = c.execute(f"SELECT COUNT(*) FROM employees WHERE id IN ({marks}) AND schedule_id IS NULL", ids_).fetchone()[0]
+        names = ", ".join(r["name"] for r in rows[:20]) + (f" y {len(rows) - 20} más" if len(rows) > 20 else "")
+        db.audit(u["username"], "mover empleados de local", f"{len(rows)} → {dest['name']}: {names}")
+        flash(request, f"{len(rows)} empleado(s) movidos a {dest['name']}."
+                       + (f" A {no_area} se les quitó el área (era de otro local)." if no_area else ""))
+        if pending:
+            flash(request, f"{pending} empleado(s) movidos no tienen horario"
+                           + (f" ({no_sched} lo perdieron por ser de otro local)" if no_sched else "")
+                           + f". Asígnales un horario de {dest['name']} en Empleados.", "warning")
+        return back("/locales#reparto")
+    flash(request, "Acción no válida.", "danger")
+    return back("/locales")
+
+
+# ------------------------------------------------------------------ resumen de locales (solo admin)
+from . import resumen  # noqa: E402
+
+
+@app.get("/resumen", response_class=HTMLResponse)
+def locales_summary(request: Request, vista: str = "hoy"):
+    u = user(request, "admin")
+    return render(request, "resumen.html", u, r=resumen.build(vista))
+
+
+@app.get("/resumen/exportar.xlsx")
+def locales_summary_export(request: Request, vista: str = "hoy"):
+    u = user(request, "admin")
+    data = resumen.build(vista)
+    db.audit(u["username"], "exportar resumen de locales", f"{data['title']}: {resumen.period_text(data)}")
+    fname = f"resumen_locales_{data['vista']}_{data['end'].isoformat()}"
+    return Response(resumen.to_excel(data, db.get_setting("company", "")),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'})

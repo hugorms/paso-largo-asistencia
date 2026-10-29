@@ -5,7 +5,7 @@
 <title>{% block title %}Asistencia{% endblock %} · Paso Largo</title>
 <link href="/static/bootstrap.min.css" rel="stylesheet">
 <link href="/static/bootstrap-icons.min.css" rel="stylesheet">
-<link href="/static/tema.css?v=12" rel="stylesheet">
+<link href="/static/tema.css?v=13" rel="stylesheet">
 </head>
 <body>
 {% macro brand() %}
@@ -18,22 +18,23 @@
   <nav class="sidebar" id="sidebar">
     {{ brand() }}
     {% set sections = [
-      ('Diario', [('/', 'speedometer2', 'Panel', None), ('/asistencia', 'calendar-check', 'Asistencia del día', None),
+      ('Diario', [('/resumen', 'grid-1x2', 'Resumen de locales', ['admin']),
+                  ('/', 'speedometer2', 'Panel', None), ('/asistencia', 'calendar-check', 'Asistencia del día', None),
                   ('/eventos', 'list-ul', 'Marcaciones', None), ('/reportes', 'file-earmark-bar-graph', 'Reportes', None)]),
       ('Personal', [('/empleados', 'people', 'Empleados', None), ('/permisos', 'clipboard-check', 'Permisos', ['admin','encargado'])]),
       ('Sistema', [('/dispositivos', 'cpu', 'Dispositivos', None), ('/configuracion', 'sliders', 'Horarios y ajustes', ['admin','encargado']),
-                   ('/usuarios', 'shield-lock', 'Usuarios', ['admin'])]),
+                   ('/locales', 'shop', 'Locales', ['admin']), ('/usuarios', 'shield-lock', 'Usuarios', ['admin'])]),
     ] %}
     {% if local_choices|length > 1 %}
-    <form method="post" action="/local" class="local-pick px-3 mb-2">
-      <label class="nav-section d-block mb-1" for="localPick">Local</label>
+    <form method="post" action="/local" class="local-pick">
+      <label for="localPick"><i class="bi bi-geo-alt"></i> Local</label>
       <select id="localPick" name="local" class="form-select form-select-sm" onchange="this.form.submit()">
         <option value="">Todos mis locales</option>
         {% for l in local_choices %}<option value="{{ l.id }}" {{ 'selected' if local_now and local_now.id == l.id }}>{{ l.name }}</option>{% endfor %}
       </select>
     </form>
     {% elif local_now %}
-    <div class="px-3 mb-2 small text-muted"><i class="bi bi-geo-alt"></i> {{ local_now.name }}</div>
+    <div class="local-pick local-one"><i class="bi bi-geo-alt"></i> {{ local_now.name }}</div>
     {% endif %}
     <div class="side-nav">
     {% for title, items in sections %}

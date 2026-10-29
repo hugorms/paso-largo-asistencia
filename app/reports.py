@@ -13,9 +13,9 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 from .attendance import hm
 
 DAYS = ["", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
-DETAIL_HEAD = ["Fecha", "Día", "N°", "Empleado", "Departamento", "Entrada", "Salida",
+DETAIL_HEAD = ["Fecha", "Día", "N°", "Empleado", "Área", "Entrada", "Salida",
                "Tardanza", "Horas", "Extra", "Estado", "Observación"]
-SUMMARY_HEAD = ["N°", "Empleado", "Departamento", "Días asistidos", "Tardanzas", "Min. tarde",
+SUMMARY_HEAD = ["N°", "Empleado", "Área", "Días asistidos", "Tardanzas", "Min. tarde",
                 "Faltas", "Justificadas", "Sin salida", "Horas trabajadas", "Horas extra"]
 FILLS = {"Tarde": "FFF3CD", "Ausente": "F8D7DA", "Justificado": "D1ECF1", "Feriado": "E2E3E5"}
 

@@ -1,0 +1,256 @@
+{% extends "base.html" %}{% block title %}Resumen de locales{% endblock %}
+{% macro ring(value, color='success', size='') -%}
+<svg viewBox="0 0 48 48" class="rs-ring {{ size }}" aria-hidden="true"><circle cx="24" cy="24" r="20" class="rs-ring-bg"/>
+  <circle cx="24" cy="24" r="20" class="rs-ring-fg rs-{{ color }}" style="stroke-dashoffset:{{ 125.66 * (1 - (value or 0) / 100) }}"/></svg>
+{%- endmacro %}
+{% macro trend(v) -%}
+{% if v is none %}<span class="rs-delta">sin datos del mes anterior</span>
+{% else %}<span class="rs-delta {{ 'up' if v > 0 else 'down' if v < 0 else '' }}" title="vs. mes anterior">{{ '▲' if v > 0 else '▼' if v < 0 else '=' }} {{ v|abs }} pts</span>{% endif %}
+{%- endmacro %}
+{% macro pctv(v) %}{{ '—' if v is none else v ~ '%' }}{% endmacro %}
+{% macro detail(c) -%}
+{% if c.id %}<form method="post" action="/local" class="m-0"><input type="hidden" name="local" value="{{ c.id }}"><input type="hidden" name="next" value="/">
+  <button class="btn btn-sm btn-outline-primary" title="Elegir {{ c.name }} en el menú y abrir su panel">Ver detalle <i class="bi bi-arrow-right"></i></button></form>{% endif %}
+{%- endmacro %}
+{% block content %}
+<style>
+  .rs-tabs { display: inline-grid; grid-template-columns: repeat(3, 1fr); padding: 3px; border-radius: 999px; background: #fff;
+             border: 1px solid var(--pl-border); box-shadow: 0 1px 2px rgba(31, 36, 20, .04); }
+  .rs-tabs a { padding: .38rem 1.1rem; border-radius: 999px; color: var(--pl-muted); font-weight: 600; font-size: .85rem; text-align: center; }
+  .rs-tabs a:hover { text-decoration: none; color: var(--pl-olive-900); }
+  .rs-tabs a.active { background: var(--pl-olive); color: #fff; box-shadow: 0 1px 3px rgba(47, 56, 24, .3); }
+  .rs-ring { width: 84px; height: 84px; flex: none; transform: rotate(-90deg); }
+  .rs-ring.sm { width: 52px; height: 52px; }
+  .rs-ring-bg, .rs-ring-fg { fill: none; stroke-width: 5; }
+  .rs-ring-bg { stroke: #ecece4; }
+  .rs-ring-fg { stroke-linecap: round; stroke-dasharray: 125.66; transition: stroke-dashoffset .9s cubic-bezier(.65, 0, .35, 1); }
+  .rs-success { stroke: #3f8a4f; } .rs-warning { stroke: #d39b1b; } .rs-danger { stroke: #b8473a; } .rs-primary { stroke: var(--pl-olive); }
+  .rs-gauge { position: relative; display: grid; place-items: center; }
+  .rs-gauge > b { position: absolute; font-size: 1.05rem; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .rs-ring.sm + b { font-size: .85rem; }
+  .rs-card { height: 100%; display: flex; flex-direction: column; }
+  .rs-card .card-header .bi-shop { color: var(--pl-olive); }
+  .rs-big { font-size: 1.05rem; line-height: 1.3; }
+  .rs-big b { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+  .rs-chips { display: grid; grid-template-columns: repeat(5, 1fr); gap: .4rem; }
+  .rs-chip { border-radius: .6rem; padding: .45rem .3rem; text-align: center; min-width: 0; }
+  .rs-chip b { display: block; font-size: 1.2rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .rs-chip span { display: block; font-size: .66rem; font-weight: 500; line-height: 1.15; overflow-wrap: anywhere; }
+  .rs-foot { display: flex; flex-wrap: wrap; gap: .4rem 1.1rem; font-size: .82rem; color: var(--pl-muted);
+             border-top: 1px solid #efefe6; padding: .7rem 1.1rem; margin-top: auto; }
+  .rs-foot b { color: var(--pl-ink); }
+  .rs-delta { font-size: .72rem; font-weight: 600; color: var(--pl-muted); font-variant-numeric: tabular-nums; }
+  .rs-delta.up { color: #2c6a39; } .rs-delta.down { color: #94352a; }
+  .rs-kpi { display: flex; align-items: center; gap: .7rem; min-width: 0; }
+  .rs-kpi .rs-l { font-size: .74rem; color: var(--pl-muted); font-weight: 500; }
+  .rs-list { list-style: none; margin: 0; padding: 0; font-size: .86rem; }
+  .rs-list li { display: flex; justify-content: space-between; gap: .6rem; padding: .3rem 0; border-bottom: 1px dashed #efefe6; }
+  .rs-list li:last-child { border-bottom: 0; }
+  .rs-list li > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rs-list .badge { flex: none; }
+  .rs-h { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--pl-muted); font-weight: 600; margin: .2rem 0 .35rem; }
+  .rs-more summary { font-size: .8rem; color: var(--pl-olive-600); cursor: pointer; list-style: none; padding-top: .25rem; }
+  .rs-chart { position: relative; height: 150px; }
+  .rs-chart-lg { position: relative; height: 240px; }
+  .rs-legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; font-size: .76rem; color: var(--pl-muted); }
+  .rs-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: .35rem; vertical-align: -1px; }
+  .rs-total .value.long { font-size: 1.45rem; }
+  .rs-total .value small { font-size: .9rem; color: var(--pl-muted); font-weight: 600; }
+  .rs-total .rs-delta { display: block; margin-top: .1rem; }
+  @media (max-width: 575.98px) {
+    .rs-tabs { width: 100%; }
+    .rs-tabs a { padding: .4rem .3rem; }
+    .rs-chips { grid-template-columns: repeat(3, 1fr); }
+    .rs-ring { width: 70px; height: 70px; }
+    .rs-gauge > b { font-size: .92rem; }
+    .rs-chart-lg { height: 200px; }
+  }
+</style>
+{% set cards, t = r.cards, r.total %}
+<div class="page-head">
+  <div><h1>Resumen de locales</h1>
+    <div class="sub">{% if r.vista == 'hoy' %}Hoy {{ r.start.strftime('%d/%m/%Y') }} · al {{ r.now.strftime('%H:%M') }}
+      {% elif r.vista == 'semana' %}Semana: del lunes {{ r.start.strftime('%d/%m') }} a hoy {{ r.end.strftime('%d/%m/%Y') }}
+      {% else %}Mes: del {{ r.start.strftime('%d/%m') }} a hoy {{ r.end.strftime('%d/%m/%Y') }} · comparado con el {{ r.prev_start.strftime('%d/%m') }} al {{ r.prev_end.strftime('%d/%m') }}{% endif %}</div></div>
+  <div class="page-actions">
+    <nav class="rs-tabs" aria-label="Periodo">
+      {% for k, label in [('hoy','Hoy'),('semana','Semana'),('mes','Mes')] %}<a href="/resumen?vista={{ k }}" class="{{ 'active' if r.vista == k }}" {{ 'aria-current=page' if r.vista == k }}>{{ label }}</a>{% endfor %}
+    </nav>
+    <a href="/resumen/exportar.xlsx?vista={{ r.vista }}" class="btn btn-outline-secondary"><i class="bi bi-file-earmark-excel"></i>Exportar a Excel</a>
+  </div>
+</div>
+
+{# ---------------- totales de la empresa ---------------- #}
+{% if r.vista == 'hoy' %}
+  {% set tiles = [('Se presentaron', t.presentes ~ '<small> de ' ~ t.esperados ~ '</small>', 'primary', 'people', ''),
+                  ('Puntuales', t.puntual, 'success', 'person-check', ''), ('Llegaron tarde', t.tarde, 'warning', 'alarm', ''),
+                  ('Ausentes', t.ausente, 'danger', 'person-x', ''), ('Con permiso', t.justificado, 'info', 'clipboard-check', ''),
+                  ('Aún no marcan', t.pendiente, 'secondary', 'hourglass-split', '')] %}
+{% elif r.vista == 'semana' %}
+  {% set tiles = [('Asistencia', pctv(t.asistencia), 'primary', 'graph-up', ''), ('Puntualidad', pctv(t.puntualidad), 'success', 'stopwatch', ''),
+                  ('Faltas', t.ausente, 'danger', 'person-x', ''), ('Tardanzas', t.tarde, 'warning', 'alarm', ''),
+                  ('Con permiso', t.justificado, 'info', 'clipboard-check', ''), ('Horas trabajadas', hm(t.worked_min), 'secondary', 'clock-history', '')] %}
+{% else %}
+  {% set tiles = [('Asistencia', pctv(t.asistencia), 'primary', 'graph-up', trend(t.d_asistencia)),
+                  ('Puntualidad', pctv(t.puntualidad), 'success', 'stopwatch', trend(t.d_puntualidad)),
+                  ('Faltas', t.ausente, 'danger', 'person-x', ''), ('Tardanzas', t.tarde, 'warning', 'alarm', ''),
+                  ('Con permiso', t.justificado, 'info', 'clipboard-check', ''), ('Horas trabajadas', hm(t.worked_min), 'secondary', 'clock-history', '')] %}
+{% endif %}
+<div class="small text-secondary fw-semibold text-uppercase mb-2" style="letter-spacing:.06em">Toda la empresa · {{ cards|length }} local{{ 'es' if cards|length != 1 }}</div>
+<div class="row g-3 mb-4">
+  {% for label, value, color, icon, extra in tiles %}
+  <div class="col-6 col-md-4 col-xl-2 stat-col"><div class="card stat rs-total"><div class="d-flex justify-content-between align-items-start gap-2">
+    <div class="min-w-0"><div class="label">{{ label }}</div><div class="value mono{{ ' long' if (value|string)|length > 6 and not loop.first }}">{{ value|safe if loop.first and r.vista == 'hoy' else value }}</div>{{ extra }}</div>
+    <div class="ico ico-{{ color }}"><i class="bi bi-{{ icon }}"></i></div></div></div></div>
+  {% endfor %}
+</div>
+
+{% if not cards %}
+<div class="card"><div class="empty"><i class="bi bi-shop"></i>No hay locales activos. Créalos en <a href="/configuracion">Horarios y ajustes</a>.</div></div>
+{% endif %}
+
+{# ---------------- HOY ---------------- #}
+{% if r.vista == 'hoy' %}
+<div class="row g-3">
+  {% for c in cards %}
+  <div class="col-12 col-md-6 col-xxl-4"><div class="card rs-card">
+    <div class="card-header"><span><i class="bi bi-shop me-1"></i>{{ c.name }}</span>{{ detail(c) }}</div>
+    <div class="card-body">
+      <div class="d-flex align-items-center gap-3 mb-3">
+        <div class="rs-gauge">{{ ring(c.pct_presentes, 'success' if (c.pct_presentes or 0) >= 90 else 'warning' if (c.pct_presentes or 0) >= 70 else 'danger') }}<b>{{ pctv(c.pct_presentes) }}</b></div>
+        <div class="rs-big"><b>{{ c.presentes }}</b> de <b>{{ c.esperados }}</b><br><span class="text-secondary">se presentaron</span></div>
+      </div>
+      <div class="rs-chips">
+        {% for n, label, color in [(c.puntual,'Puntuales','success'),(c.tarde,'Tarde','warning'),(c.ausente,'Ausentes','danger'),
+                                   (c.justificado,'Con permiso','info'),(c.pendiente,'Sin marcar aún','secondary')] %}
+        <div class="rs-chip ico-{{ color }}" title="{{ label }}"><b>{{ n }}</b><span>{{ label }}</span></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="rs-foot">
+      <span title="Biométricos de este local"><span class="dot {{ 'dot-on' if c.devices.total and c.devices.online == c.devices.total else 'dot-off' if c.devices.total else '' }} me-1"></span>
+        Biométricos <b>{{ c.devices.online }}/{{ c.devices.total }}</b> en línea</span>
+      <span title="{{ c.away.out|join(', ') }}"><i class="bi bi-signpost-split me-1"></i><b>{{ c.away.out|length }}</b> marcaron en otro local</span>
+      {% if c.away['in'] %}<span title="{{ c.away['in']|join(', ') }}"><i class="bi bi-box-arrow-in-right me-1"></i><b>{{ c.away['in']|length }}</b> de otro local marcaron aquí</span>{% endif %}
+    </div>
+  </div></div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ---------------- SEMANA ---------------- #}
+{% if r.vista == 'semana' and cards %}
+<div class="card mb-3"><div class="card-header">Comparación de locales en la semana
+  <div class="rs-legend fw-normal"><span><i style="background:#3f8a4f"></i>Puntual</span><span><i style="background:#d39b1b"></i>Tarde</span><span><i style="background:#b8473a"></i>Ausente</span></div></div>
+  <div class="card-body"><div class="rs-chart-lg" style="height:{{ [140, 60 + 46 * cards|length]|max }}px"><canvas id="cmpWeek"></canvas></div></div></div>
+<div class="row g-3">
+  {% for c in cards %}
+  <div class="col-12 col-md-6 col-xxl-4"><div class="card rs-card">
+    <div class="card-header"><span><i class="bi bi-shop me-1"></i>{{ c.name }}</span>{{ detail(c) }}</div>
+    <div class="card-body">
+      <div class="d-flex flex-wrap gap-3 mb-2">
+        <div class="rs-kpi"><div class="rs-gauge">{{ ring(c.asistencia, 'primary', 'sm') }}<b>{{ pctv(c.asistencia) }}</b></div><span class="rs-l">asistencia</span></div>
+        <div class="rs-kpi"><div class="rs-gauge">{{ ring(c.puntualidad, 'success', 'sm') }}<b>{{ pctv(c.puntualidad) }}</b></div><span class="rs-l">puntualidad</span></div>
+      </div>
+      <div class="rs-chart mb-3"><canvas data-week="{{ loop.index0 }}"></canvas></div>
+      <div class="row g-3">
+        <div class="col-6">
+          <div class="rs-h">Faltaron</div>
+          {% set lst = c.faltas %}
+          <ul class="rs-list">{% for f in lst[:4] %}<li><span>{{ f.name }}</span><span class="badge text-bg-danger">{{ f.dias }} día{{ 's' if f.dias != 1 }}</span></li>
+            {% else %}<li class="text-secondary"><span><i class="bi bi-emoji-smile me-1"></i>Nadie faltó</span></li>{% endfor %}</ul>
+          {% if lst|length > 4 %}<details class="rs-more"><summary>+{{ lst|length - 4 }} más</summary><ul class="rs-list">
+            {% for f in lst[4:] %}<li><span>{{ f.name }}</span><span class="badge text-bg-danger">{{ f.dias }} día{{ 's' if f.dias != 1 }}</span></li>{% endfor %}</ul></details>{% endif %}
+        </div>
+        <div class="col-6">
+          <div class="rs-h">Más tardanzas</div>
+          {% set lst = c.tardanzas %}
+          <ul class="rs-list">{% for x in lst[:4] %}<li><span title="{{ x.min }} min en total">{{ x.name }}</span><span class="badge text-bg-warning">{{ x.veces }} {{ 'vez' if x.veces == 1 else 'veces' }}</span></li>
+            {% else %}<li class="text-secondary"><span><i class="bi bi-emoji-smile me-1"></i>Nadie tarde</span></li>{% endfor %}</ul>
+          {% if lst|length > 4 %}<details class="rs-more"><summary>+{{ lst|length - 4 }} más</summary><ul class="rs-list">
+            {% for x in lst[4:] %}<li><span title="{{ x.min }} min en total">{{ x.name }}</span><span class="badge text-bg-warning">{{ x.veces }} {{ 'vez' if x.veces == 1 else 'veces' }}</span></li>{% endfor %}</ul></details>{% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="rs-foot"><span><b>{{ c.presentes }}</b> asistencias</span><span><b>{{ c.ausente }}</b> faltas</span><span><b>{{ c.tarde }}</b> tardanzas</span><span><b>{{ hm(c.worked_min) }}</b> h trabajadas</span></div>
+  </div></div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ---------------- MES ---------------- #}
+{% if r.vista == 'mes' and cards %}
+<div class="card mb-3"><div class="card-header">Asistencia y puntualidad por local
+  <div class="rs-legend fw-normal"><span><i style="background:#6b7b3a"></i>Asistencia</span><span><i style="background:#3f8a4f"></i>Puntualidad</span><span><i style="background:#d5d9c3"></i>Mes anterior</span></div></div>
+  <div class="card-body"><div class="rs-chart-lg" style="height:{{ [160, 60 + 64 * cards|length]|max }}px"><canvas id="cmpMonth"></canvas></div></div></div>
+<div class="row g-3">
+  {% for c in cards %}
+  <div class="col-12 col-md-6 col-xxl-4"><div class="card rs-card">
+    <div class="card-header"><span><i class="bi bi-shop me-1"></i>{{ c.name }}</span>{{ detail(c) }}</div>
+    <div class="card-body">
+      <div class="row g-2 mb-3">
+        <div class="col-6"><div class="rs-kpi"><div class="rs-gauge">{{ ring(c.asistencia, 'primary', 'sm') }}<b>{{ pctv(c.asistencia) }}</b></div>
+          <div><div class="rs-l">asistencia</div>{{ trend(c.d_asistencia) }}</div></div></div>
+        <div class="col-6"><div class="rs-kpi"><div class="rs-gauge">{{ ring(c.puntualidad, 'success', 'sm') }}<b>{{ pctv(c.puntualidad) }}</b></div>
+          <div><div class="rs-l">puntualidad</div>{{ trend(c.d_puntualidad) }}</div></div></div>
+      </div>
+      <div class="row g-3">
+        <div class="col-6">
+          <div class="rs-h">Más faltas</div>
+          <ul class="rs-list">{% for f in c.faltas %}<li><span>{{ f.name }}</span><span class="badge text-bg-danger">{{ f.dias }}</span></li>
+            {% else %}<li class="text-secondary"><span><i class="bi bi-emoji-smile me-1"></i>Sin faltas</span></li>{% endfor %}</ul>
+        </div>
+        <div class="col-6">
+          <div class="rs-h">Más tardanzas</div>
+          <ul class="rs-list">{% for x in c.tardanzas %}<li><span title="{{ x.min }} min en total">{{ x.name }}</span><span class="badge text-bg-warning">{{ x.veces }}</span></li>
+            {% else %}<li class="text-secondary"><span><i class="bi bi-emoji-smile me-1"></i>Sin tardanzas</span></li>{% endfor %}</ul>
+        </div>
+      </div>
+    </div>
+    <div class="rs-foot"><span><i class="bi bi-clock-history me-1"></i><b>{{ hm(c.worked_min) }}</b> h trabajadas</span><span><b>{{ c.ausente }}</b> faltas</span>
+      <span><b>{{ c.tarde }}</b> tardanzas</span><span><b>{{ c.empleados }}</b> empleados</span></div>
+  </div></div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if r.vista != 'hoy' and r.cards %}
+<script src="/static/chart.umd.js"></script>
+<script>
+Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+Chart.defaults.color = '#6c705f';
+const C = {puntual: '#3f8a4f', tarde: '#d39b1b', ausente: '#b8473a', olive: '#6b7b3a', prev: '#d5d9c3', grid: '#efefe6'};
+const tip = {backgroundColor: 'rgba(31,36,20,.95)', padding: 9, cornerRadius: 8, boxPadding: 4};
+const cards = {{ r.cards | map(attribute='name') | list | tojson }};
+{% if r.vista == 'semana' %}
+const series = {{ r.cards | map(attribute='series') | list | tojson }};
+const ds = (s, k, label) => ({label, data: s.map(x => x[k]), backgroundColor: C[k], borderRadius: 4, borderSkipped: false, maxBarThickness: 26});
+// mismo máximo en todos los locales para poder compararlos a simple vista
+const ymax = Math.max(1, ...series.flat().map(x => x.puntual + x.tarde + x.ausente));
+document.querySelectorAll('[data-week]').forEach(cv => {
+  const s = series[+cv.dataset.week];
+  new Chart(cv, {type: 'bar', data: {labels: s.map(x => x.label), datasets: [ds(s, 'puntual', 'Puntual'), ds(s, 'tarde', 'Tarde'), ds(s, 'ausente', 'Ausente')]},
+    options: {maintainAspectRatio: false, interaction: {mode: 'index', intersect: false}, plugins: {legend: {display: false}, tooltip: tip},
+      scales: {x: {stacked: true, grid: {display: false}}, y: {stacked: true, max: ymax, ticks: {precision: 0, maxTicksLimit: 4}, grid: {color: C.grid}, border: {display: false}}}}});
+});
+const tot = k => series.map(s => s.reduce((a, x) => a + x[k], 0));
+new Chart(document.getElementById('cmpWeek'), {type: 'bar',
+  data: {labels: cards, datasets: [['puntual', 'Puntual'], ['tarde', 'Tarde'], ['ausente', 'Ausente']].map(([k, label]) =>
+    ({label, data: tot(k), backgroundColor: C[k], borderRadius: 4, borderSkipped: false, maxBarThickness: 30}))},
+  options: {indexAxis: 'y', maintainAspectRatio: false, interaction: {mode: 'index', intersect: false}, plugins: {legend: {display: false}, tooltip: tip},
+    scales: {x: {stacked: true, ticks: {precision: 0}, grid: {color: C.grid}, border: {display: false}}, y: {stacked: true, grid: {display: false}}}}});
+{% else %}
+const m = {{ r.cards | map(attribute='asistencia') | list | tojson }}, mp = {{ r.cards | map(attribute='prev') | map(attribute='asistencia') | list | tojson }};
+const p = {{ r.cards | map(attribute='puntualidad') | list | tojson }}, pp = {{ r.cards | map(attribute='prev') | map(attribute='puntualidad') | list | tojson }};
+const bar = (label, data, color) => ({label, data, backgroundColor: color, borderRadius: 4, borderSkipped: false, maxBarThickness: 16, categoryPercentage: .8, barPercentage: .9});
+new Chart(document.getElementById('cmpMonth'), {type: 'bar',
+  data: {labels: cards, datasets: [bar('Asistencia', m, C.olive), bar('Asistencia mes anterior', mp, C.prev),
+                                   bar('Puntualidad', p, C.puntual), bar('Puntualidad mes anterior', pp, '#e7eadb')]},
+  options: {indexAxis: 'y', maintainAspectRatio: false, plugins: {legend: {display: false},
+      tooltip: {...tip, callbacks: {label: c => `${c.dataset.label}: ${c.raw == null ? 'sin datos' : c.raw + '%'}`}}},
+    scales: {x: {min: 0, max: 100, ticks: {callback: v => v + '%', maxTicksLimit: 6}, grid: {color: C.grid}, border: {display: false}}, y: {grid: {display: false}}}}});
+{% endif %}
+</script>
+{% endif %}
+{% endblock %}

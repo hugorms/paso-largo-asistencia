@@ -76,7 +76,8 @@ def password_tag(secret, password_hash):
 
 def safe_back(referer, default):
     """Vuelve a la página anterior, pero solo dentro de este sistema (nunca a otro sitio)."""
-    parts = urlsplit(referer or "")
+    # Los navegadores leen «/\\» como «//» (otro sitio): se normaliza antes de revisar
+    parts = urlsplit((referer or "").replace("\\", "/"))
     path = parts.path if parts.path.startswith("/") and not parts.path.startswith("//") else ""
     return (path + (f"?{parts.query}" if parts.query else "")) if path else default
 
