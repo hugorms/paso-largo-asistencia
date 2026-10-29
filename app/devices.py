@@ -40,8 +40,17 @@ def _now():
 def refresh_info(dev):
     try:
         info = client(dev).device_info()
+        mine = db.q1("SELECT local_id FROM devices WHERE id=?", (dev["id"],))
+        if info.get("serialNumber") and mine and mine["local_id"] is not None and db.q1(
+                "SELECT 1 FROM devices WHERE serial=? AND id<>? AND local_id IS NOT NULL AND local_id<>?",
+                (info["serialNumber"], dev["id"], mine["local_id"])):
+            # Es el mismo aparato que otro local ya tiene registrado (con otra IP o nombre): no se une ni se lee
+            # (si no, sus marcas se copiarían a este local). Queda pausado hasta que el admin lo revise.
+            msg = f"Ese biométrico {OTHER_LOCAL}; se dejó pausado. Pídele al administrador que lo revise."
+            db.ex("UPDATE devices SET active=0, online=0, paused_other=1, last_error=? WHERE id=?", (msg, dev["id"]))
+            raise ISAPIError(msg)
         with db.tx() as c:
-            c.execute("""UPDATE devices SET online=1, last_seen=?, last_error=NULL, model=?, serial=?, firmware=?, mac=?
+            c.execute("""UPDATE devices SET online=1, last_seen=?, last_error=NULL, paused_other=0, model=?, serial=?, firmware=?, mac=?
                          WHERE id=?""", (_now(), info.get("model"), info.get("serialNumber"),
                                          info.get("firmwareVersion"), info.get("macAddress"), dev["id"]))
             # si este mismo equipo ya estaba registrado con otra IP, se une a ese registro
@@ -79,9 +88,13 @@ def move_device(dev, host, port, https):
     del mismo equipo, se unen."""
     host = host.strip().lower()
     with db.tx() as c:
-        other = c.execute("SELECT id, name, serial, mac FROM devices WHERE host=? AND port=? AND id<>?",
+        other = c.execute("SELECT id, name, serial, mac, local_id FROM devices WHERE host=? AND port=? AND id<>?",
                           (host, port, dev["id"])).fetchone()
         if other:
+            mine = c.execute("SELECT local_id FROM devices WHERE id=?", (dev["id"],)).fetchone()
+            if other["local_id"] is not None and mine and mine["local_id"] is not None \
+                    and other["local_id"] != mine["local_id"]:
+                raise ISAPIError(f"La dirección {host}:{port} ya es de un equipo de otro local.")
             if (other["serial"] or other["mac"]) and not discovery.same_device(
                     dev["serial"], dev["mac"], other["serial"], other["mac"]):
                 raise ISAPIError(f"La dirección {host}:{port} figura como otro equipo («{other['name']}»). "
@@ -365,6 +378,13 @@ def prepare_face(raw: bytes) -> bytes:
     return buf.getvalue()
 
 
+OTHER_LOCAL = "ya está registrado en otro local"
+
+# Equipos que se leen: activos y de un local activo (o todavía sin local)
+POLLED = """SELECT * FROM devices WHERE active=1
+            AND (local_id IS NULL OR local_id IN (SELECT id FROM locales WHERE active=1))"""
+
+
 def local_devices(local_id):
     """Equipos activos de un local (ninguno si el empleado aún no tiene local)."""
     if local_id is None:
@@ -399,12 +419,13 @@ def push_employee(emp, devices=None):
 
 def remove_employee(emp, local_ids=None):
     """Borra el usuario y su rostro de los equipos activos.
-    local_ids=None: de los equipos de TODOS los locales. Es lo seguro al dar de baja o al cambiar el N°: el N° es
-    único en toda la empresa, así que ese N° en cualquier equipo es esta persona (pudo registrarse para marcar en
-    otro local); si quedara, seguiría marcando y el N° viejo volvería a aparecer como empleado nuevo.
+    local_ids=None: de los equipos de su local y de cualquier otro equipo donde el sistema lo subió (employee_sync).
+    No se toca un equipo de otro local donde nunca lo subimos: ese N° allí puede ser otra persona de ese local.
     local_ids=[...]: solo los equipos de esos locales (al pasar a la persona a otro local se retira del anterior)."""
     if local_ids is None:
-        devs = db.q("SELECT * FROM devices WHERE active=1")
+        devs = db.q("""SELECT * FROM devices WHERE active=1 AND (local_id IS ? OR local_id=? OR id IN
+                       (SELECT device_id FROM employee_sync WHERE employee_id=?)) ORDER BY id""",
+                    (emp["local_id"], emp["local_id"], emp["id"]))
     else:
         devs = [d for lid in local_ids for d in local_devices(lid)]
     results = []
@@ -574,7 +595,7 @@ class Poller(threading.Thread):
 
     def _quick_pull(self):
         """El equipo avisó una marca: solo se descargan los últimos minutos, sin tareas de mantenimiento."""
-        for dev in db.q("SELECT * FROM devices WHERE active=1"):
+        for dev in db.q(POLLED):
             if self.fails.get(dev["id"]):
                 continue  # un equipo caído no debe demorar las marcas del otro; lo revisa la vuelta normal
             try:
@@ -646,12 +667,13 @@ class Poller(threading.Thread):
                     self.wake.wait(1)
                     continue
             last_full = time.time()
-            devs = db.q("SELECT * FROM devices WHERE active=1")
+            devs = db.q(POLLED)
             self._ensure_listeners(devs)
             for dev in devs:
                 try:
                     if time.time() - self.clock_checked.get(dev["id"], 0) > 600:
                         self.clock_checked[dev["id"]] = time.time()
+                        refresh_info(dev)  # si resulta ser el aparato de otro local, queda pausado y no se lee
                         if abs(check_clock(dev) or 0) > 120:
                             self.deep_checked.pop(dev["id"], None)  # tras corregir la hora, repaso completo
                     if time.time() - self.faces_checked.get(dev["id"], 0) > 60:

@@ -163,6 +163,8 @@ def merge_device(c, keep, dup):
     k = c.execute("SELECT * FROM devices WHERE id=?", (keep,)).fetchone()
     if not d or not k:
         return
+    if d["local_id"] is not None and k["local_id"] is not None and d["local_id"] != k["local_id"]:
+        return  # registrados en locales distintos: lo decide el admin, no se mezclan historiales
     c.execute("UPDATE OR IGNORE events SET device_id=? WHERE device_id=?", (keep, dup))
     c.execute("DELETE FROM events WHERE device_id=?", (dup,))
     c.execute("UPDATE OR IGNORE employee_sync SET device_id=? WHERE device_id=?", (keep, dup))
@@ -304,6 +306,9 @@ def init():
         for table in ("devices", "departments"):
             if "sede" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN sede TEXT")
+        if "paused_other" not in {r[1] for r in c.execute("PRAGMA table_info(devices)")}:
+            # 1 = pausado porque es el mismo aparato que otro local ya tiene registrado (solo el admin lo libera)
+            c.execute("ALTER TABLE devices ADD COLUMN paused_other INTEGER DEFAULT 0")
         _merge_duplicate_devices(c)
         if "local_id" not in {r[1] for r in c.execute("PRAGMA table_info(employees)")}:
             _migrate_locales(c)

@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse, Response
 
 USER, PASSWORD, REALM = "admin", "12345", "DS-K1T341AMF"
 SERIAL = "SIM0001"
+PORT = 8090
 _z = datetime.now().astimezone().strftime("%z")
 TZ = f"{_z[:3]}:{_z[3:]}"
 app = FastAPI()
@@ -70,7 +71,7 @@ def add_event(minor, emp=None, when=None):
             "major": 5, "minor": minor, "time": now_iso(when), "serialNo": state["serial"],
             "employeeNoString": emp or "", "name": u["name"] if u else "",
             "currentVerifyMode": "face" if emp else "invalid", "cardReaderNo": 1, "doorNo": 1,
-            "pictureURL": f"http://127.0.0.1:8090/picture/{state['serial']}.jpg" if emp else None,
+            "pictureURL": f"http://127.0.0.1:{PORT}/picture/{state['serial']}.jpg" if emp else None,
         })
         state["events"].sort(key=lambda e: e["time"])
 
@@ -149,7 +150,7 @@ async def face_search(request: Request):
     no = (await request.json()).get("FPID")
     found = no in state["faces"]
     return {"statusCode": 1, "numOfMatches": int(found),
-            "MatchList": [{"FPID": no, "faceURL": f"http://127.0.0.1:8090/face/{no}.jpg"}] if found else []}
+            "MatchList": [{"FPID": no, "faceURL": f"http://127.0.0.1:{PORT}/face/{no}.jpg"}] if found else []}
 
 
 @app.get("/face/{no}.jpg")
@@ -281,7 +282,7 @@ if __name__ == "__main__":
     p.add_argument("--puerto", type=int, default=8090)
     p.add_argument("--serie", default="SIM0001", help="número de serie (distinto en cada simulador)")
     a = p.parse_args()
-    SERIAL = a.serie
+    SERIAL, PORT = a.serie, a.puerto
     shown = a.ip
     if a.ip == "0.0.0.0":
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

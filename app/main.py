@@ -194,11 +194,11 @@ TREND_KEYS = {"Puntual": "puntual", "Tarde": "tarde", "Ausente": "ausente"}
 
 
 def emp_locales(request, u):
-    """Locales de los empleados que se ven ahora, para attendance.compute: None = todos (el admin sin
-    elegir local, que también ve los que aún no tienen local)."""
+    """Locales de los empleados que se ven ahora, para attendance.compute. El admin sin elegir local ve los
+    locales activos y también a los empleados que aún no tienen local (None en la lista)."""
     vis = alcance.ids(request, u)
     if alcance.is_admin(u) and request.session.get("local") not in vis:
-        return None
+        return vis + [None]
     return vis
 
 
@@ -487,6 +487,14 @@ async def employee_save(request: Request):
 
 
 def _flash_results(request, msg, res):
+    u = user(request)
+    if not alcance.is_admin(u):
+        mine = {d["name"] for d in db.q(f"SELECT name FROM devices WHERE {alcance.sql(request, u, 'local_id')[0]}",
+                                         alcance.sql(request, u, "local_id")[1])}
+        others = [r for r in res if r[0] not in mine]
+        res = [r for r in res if r[0] in mine]
+        if others:
+            flash(request, f"También se actualizó en {len(others)} equipo(s) de otros locales.", "info")
     if not res:
         flash(request, msg + " (Su local no tiene equipos activos.)", "warning")
     for name, ok, m in res:
@@ -699,8 +707,10 @@ async def config_save(request: Request, what: str):
         return denied("Solo el administrador puede cambiar feriados y ajustes generales.")
     # Áreas y horarios: se crean en el local elegido y solo se tocan los de un local permitido
     new_local = alcance.default_local(request, u)
-    if what in ("departamento", "horario") and not f.get("id") and not new_local:
+    if (what == "departamento" or (what == "horario" and not f.get("id"))) and not new_local:
         return denied("Elige un local arriba en el menú.")
+    if what.endswith("-eliminar") and not f.get("id"):
+        return denied("Falta indicar qué eliminar.")
     if what == "departamento-eliminar" and not alcance.row(request, u, "departments", f.get("id")):
         return denied("Esa área no existe.")
     if what in ("horario", "horario-eliminar") and f.get("id") and not alcance.row(request, u, "schedules", f["id"]):
@@ -715,6 +725,10 @@ async def config_save(request: Request, what: str):
     elif what == "horario":
         if not (f.get("name") and f.get("start_time") and f.get("end_time")):
             flash(request, "El horario necesita nombre, hora de entrada y hora de salida.", "danger")
+            return back("/configuracion")
+        if f["end_time"] <= f["start_time"]:
+            flash(request, "La hora de salida debe ser después de la de entrada (los turnos de noche aún no se manejan).",
+                  "danger")
             return back("/configuracion")
         if not all((f.get(k) or "0").isdigit() for k in ("tolerance_min", "lunch_min")):
             flash(request, "La tolerancia y el almuerzo deben ser minutos (números enteros).", "danger")
@@ -824,6 +838,9 @@ async def leave_save(request: Request):
         flash(request, "Ese empleado no existe.", "danger")
         return back("/permisos")
     elif f.get("employee_id") and f.get("date_from"):
+        if f.get("kind") not in LEAVE_KINDS:
+            flash(request, "Elige el tipo de permiso.", "danger")
+            return back("/permisos")
         if (f.get("date_to") or f["date_from"]) < f["date_from"]:
             flash(request, "La fecha «hasta» no puede ser anterior a «desde».", "danger")
             return back("/permisos")
@@ -855,7 +872,11 @@ async def manual_mark(request: Request):
     if not emp:
         flash(request, "Ese empleado no existe.", "danger")
     elif f.get("date") and f.get("time"):
-        t = f"{f['date']}T{f['time']}:00"
+        try:
+            t = datetime.strptime(f"{f['date']} {f['time']}", "%Y-%m-%d %H:%M").isoformat()
+        except ValueError:
+            flash(request, "Fecha u hora no válidas (usa el formato 07:45).", "danger")
+            return back(f"/asistencia?fecha={f.get('date', '')}")
         db.ex("""INSERT INTO events(device_id, serial_no, event_time, employee_no, name, major, minor, verify_mode,
                  attendance_status, valid, source) VALUES (NULL, NULL, ?, ?, ?, 0, 0, 'manual', ?, 1, 'manual')""",
               (t, emp["employee_no"], emp["name"], f.get("kind") or None))
@@ -881,7 +902,8 @@ def events(request: Request, desde: str = "", hasta: str = "", emp: str = "", de
         where.append("ev.employee_no IS NOT NULL")
     rows = visible_events(request, u, where, args, 1000, ", s.in_from, s.in_to, s.out_from, s.out_to",
                           "LEFT JOIN schedules s ON s.id=e.schedule_id")
-    roles = attendance.mark_roles(d1, d2, locales=emp_locales(request, u))
+    # también la gente de otros locales permitidos que marcó en estos equipos (si no, saldría «No cuenta»)
+    roles = attendance.mark_roles(d1, d2, locales=alcance.allowed(u) + ([None] if alcance.is_admin(u) else []))
     for ev in rows:
         ev["counts_as"] = (roles.get((ev["employee_no"], datetime.fromisoformat(ev["event_time"])), "No cuenta")
                            if ev["valid"] and not ev.get("other") else "")
@@ -993,6 +1015,22 @@ def _devices_page(request, u, **ctx):
                   default_local=alcance.default_local(request, u), **ctx)
 
 
+def _addr(host):
+    """IP real de un host («localhost» y nombres se resuelven), para no confundir dos formas de la misma dirección."""
+    import socket
+    try:
+        return socket.gethostbyname(host.strip().lower())
+    except (OSError, UnicodeError):
+        return host.strip().lower()
+
+
+def _foreign_at(request, u, host, port, exclude_id=0):
+    """¿Hay un equipo de otro local (que este usuario no ve) en esa misma dirección y puerto?"""
+    ip = _addr(host)
+    return any(not alcance.can_see(request, u, d["local_id"]) and _addr(d["host"]) == ip
+               for d in db.q("SELECT host, local_id FROM devices WHERE port=? AND id<>?", (port, exclude_id)))
+
+
 def _device_visible(request, u, did):
     """El equipo si este usuario puede verlo (su local); si no, None (se trata como inexistente)."""
     return alcance.row(request, u, "devices", did)
@@ -1065,7 +1103,7 @@ async def device_face(request: Request, did: int, no: str):
     """Foto del rostro guardado en ese equipo para ese N° (para comparar entre equipos)."""
     u = user(request, "admin", "encargado")
     dev = _device_visible(request, u, did)
-    if not dev:
+    if not dev or dev.get("paused_other"):
         return Response(status_code=404)
 
     def get():
@@ -1107,7 +1145,8 @@ async def device_save(request: Request):
     # Un equipo se identifica por IP + puerto: nunca se registra dos veces
     same = db.q1("SELECT id, name, local_id FROM devices WHERE host=? AND port=? AND id<>?",
                  (host, port, old["id"] if old else 0))
-    if same and not alcance.can_see(request, u, same["local_id"]):
+    if (same and not alcance.can_see(request, u, same["local_id"])) or \
+            await run_in_threadpool(_foreign_at, request, u, host, port, old["id"] if old else 0):
         # es de otro local: no se toca ni se dice cuál es
         flash(request, f"La dirección {host}:{port} ya está registrada en otro local. Pídele al administrador que lo revise.",
               "danger")
@@ -1120,6 +1159,8 @@ async def device_save(request: Request):
         vals[-2] = 1
         flash(request, f"El equipo {host}:{port} ya estaba registrado como «{same['name']}»: se actualizaron "
                        "sus datos en lugar de crear otro.", "info")
+    if old and not alcance.is_admin(u) and db.q1("SELECT paused_other FROM devices WHERE id=?", (old["id"],))["paused_other"]:
+        vals[-2] = 0  # pausado por ser de otro local: sigue pausado hasta que el admin lo revise
     if old:
         db.ex("""UPDATE devices SET name=?, host=?, port=?, https=?, username=?, tz_offset=?, door_no=?, direction=?,
                  active=?, local_id=? WHERE id=?""", vals + [old["id"]])
@@ -1131,9 +1172,9 @@ async def device_save(request: Request):
                        local_id, password) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", vals + [f.get("password", "")])
     db.audit(u["username"], "guardar dispositivo", f"{f['name']} {f['host']} (local {lid})")
     dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
-    poller.wake.set()
-    try:
+    try:  # primero se revisa que no sea el aparato de otro local; recién entonces lo lee el lector
         info = await run_in_threadpool(devices.refresh_info, dev)
+        poller.wake.set()
         flash(request, f"Conectado a {info.get('deviceName') or dev['name']} — modelo {info.get('model')}, "
                        f"serie {info.get('serialNumber')}, firmware {info.get('firmwareVersion')}.")
     except ISAPIError as e:
@@ -1148,14 +1189,18 @@ async def device_action(request: Request, did: int, action: str):
     if not dev:
         flash(request, "Ese equipo no existe o es de otro local.", "danger")
         return back("/dispositivos")
+    if dev.get("paused_other") and action != "eliminar" and not (alcance.is_admin(u) and action in ("activar", "ip")):
+        # es el aparato de otro local: no se le habla (ni se bajan sus marcas) hasta que el admin lo revise
+        flash(request, "Ese equipo se pausó porque ya está registrado en otro local: solo el administrador "
+                       "puede reactivarlo o cambiarle la IP.", "danger")
+        return back("/dispositivos")
     c = devices.client(dev)
     try:
         if action == "ip" and not alcance.is_admin(u):
             # cambiar a la IP de un equipo de otro local lo uniría con ese registro: solo el admin
             f = await form(request)
             host, _, port = (f.get("host") or "").strip().partition(":")
-            other = db.q1("SELECT local_id FROM devices WHERE host=? AND id<>?", (host.lower(), did))
-            if other and not alcance.can_see(request, u, other["local_id"]):
+            if _foreign_at(request, u, host, int(port) if port.isdigit() else dev["port"], did):
                 flash(request, f"La IP {host} ya está registrada en otro local. Pídele al administrador que lo revise.",
                       "danger")
                 return back("/dispositivos")
@@ -1193,6 +1238,11 @@ async def device_action(request: Request, did: int, action: str):
             flash(request, "Dispositivo desactivado: ya no se leen sus marcas (su historial se conserva).", "warning")
         elif action == "activar":
             db.ex("UPDATE devices SET active=1 WHERE id=?", (did,))
+            try:  # se revisa enseguida que no sea el aparato de otro local (si lo es, vuelve a quedar pausado)
+                await run_in_threadpool(devices.refresh_info, db.q1("SELECT * FROM devices WHERE id=?", (did,)))
+            except ISAPIError as e:
+                if devices.OTHER_LOCAL in str(e):
+                    raise
             poller.wake.set()
             flash(request, f"{dev['name']} vuelve a estar activo.")
         db.audit(u["username"], f"dispositivo {action}", dev["name"])
@@ -1396,6 +1446,16 @@ async def locales_move(request: Request):
             db.ex("UPDATE devices SET local_id=? WHERE id=?", (dest["id"], dev["id"]))
             db.audit(u["username"], "mover biométrico de local", f"{dev['name']}: {lname(dev['local_id'])} → {dest['name']}")
             flash(request, f"Biométrico «{dev['name']}» ahora es de {dest['name']}.")
+            if dev["active"]:
+                dev = db.q1("SELECT * FROM devices WHERE id=?", (dev["id"],))
+                errors = 0
+                for emp in db.q("SELECT * FROM employees WHERE active=1 AND local_id=?", (dest["id"],)):
+                    errors += sum(not ok for _, ok, _m in await run_in_threadpool(devices.push_employee, emp, [dev]))
+                if errors:
+                    flash(request, f"{errors} empleado(s) de {dest['name']} no se pudieron enviar al equipo (¿apagado?). "
+                                   "Usa «Sincronizar todos» en Empleados cuando esté en línea.", "warning")
+                flash(request, "La gente del local anterior que estaba en ese equipo sigue registrada en él; si ya no "
+                               "debe marcar ahí, bórrala desde Dispositivos → Revisar empleados entre equipos.", "info")
         return back("/locales#reparto")
     if what == "area":
         area = db.q1("SELECT * FROM departments WHERE id=?", (f.get("id") or 0,))
