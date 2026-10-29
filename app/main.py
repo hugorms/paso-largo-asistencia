@@ -273,7 +273,7 @@ def dashboard_data(request, u, days: int = 7):
     return {"total": db.q1(f"SELECT COUNT(*) n FROM employees WHERE active=1 AND {cd}", ad)["n"],
             "puntual": count("Puntual"), "tarde": count("Tarde"), "ausente": count("Ausente"),
             "pendiente": count("Pendiente"), "justificado": count("Justificado"),
-            "presentes": sum(1 for r in rows if r["entry"]),
+            "presentes": sum(1 for r in rows if resumen.is_present(r)),
             "late_list": [{"name": r["name"], "entry": r["entry"].strftime("%H:%M"), "late": r["late_min"]}
                           for r in rows if r["status"] == "Tarde"],
             "absent_list": [r["name"] for r in rows if r["status"] in ("Ausente", "Pendiente")],
@@ -462,6 +462,7 @@ async def employee_save(request: Request):
                        gender, schedule_id, hire_date, active, local_id, photo, face_at)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     vals + [photo_name, date.today().isoformat() if photo_name else None])
+    db.ex("UPDATE employees SET deactivated_at=CASE WHEN active=0 THEN COALESCE(deactivated_at, ?) END WHERE id=?", (date.today().isoformat(), eid))
     db.audit(u["username"], "guardar empleado", f"{no} {f['name']}")
     emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
     if moved_from and not renamed:
@@ -518,6 +519,7 @@ async def employee_delete(request: Request, eid: int):
     res = await run_in_threadpool(devices.remove_employee, emp)
     # Se conserva el historial de marcas; el empleado queda inactivo
     db.ex("UPDATE employees SET active=0 WHERE id=?", (eid,))
+    db.ex("UPDATE employees SET deactivated_at=CASE WHEN active=0 THEN COALESCE(deactivated_at, ?) END WHERE id=?", (date.today().isoformat(), eid))
     db.audit(u["username"], "desactivar empleado", f"{emp['employee_no']} {emp['name']}")
     _flash_results(request, "Empleado desactivado y retirado de los equipos.", res)
     return back("/empleados")
@@ -733,7 +735,10 @@ async def config_save(request: Request, what: str):
         if not all((f.get(k) or "0").isdigit() for k in ("tolerance_min", "lunch_min")):
             flash(request, "La tolerancia y el almuerzo deben ser minutos (números enteros).", "danger")
             return back("/configuracion")
-        days = ",".join(sorted(v for k, v in (await request.form()).multi_items() if k == "days"))
+        days = ",".join(sorted(v for k, v in (await request.form()).multi_items() if k == "days" and v in "1234567"))
+        if not days:
+            flash(request, "Marca al menos un día de trabajo en el horario.", "danger")
+            return back("/configuracion")
         win = tuple(f.get(k) or None for k in ("in_from", "in_to", "out_from", "out_to"))
         if any(win) and not all(win):
             flash(request, "Completa las cuatro horas de las ventanas, o déjalas todas vacías para no usar ventanas.", "danger")
@@ -840,6 +845,9 @@ async def leave_save(request: Request):
     elif f.get("employee_id") and f.get("date_from"):
         if f.get("kind") not in LEAVE_KINDS:
             flash(request, "Elige el tipo de permiso.", "danger")
+            return back("/permisos")
+        if not attendance.parse_date(f["date_from"]) or (f.get("date_to") and not attendance.parse_date(f["date_to"])):
+            flash(request, "Escribe fechas válidas para el permiso.", "danger")
             return back("/permisos")
         if (f.get("date_to") or f["date_from"]) < f["date_from"]:
             flash(request, "La fecha «hasta» no puede ser anterior a «desde».", "danger")
@@ -1473,15 +1481,20 @@ async def locales_move(request: Request):
             c.execute("UPDATE departments SET local_id=? WHERE id=?", (dest["id"], area["id"]))
             n = c.execute("UPDATE employees SET local_id=? WHERE department_id=?", (dest["id"], area["id"])).rowcount
             # el horario es de cada local: si el que tenían no es del nuevo local, se les quita
-            lost = c.execute("""UPDATE employees SET schedule_id=NULL WHERE department_id=? AND schedule_id IS NOT NULL
-                                AND schedule_id NOT IN (SELECT id FROM schedules WHERE local_id=?)""",
-                             (area["id"], dest["id"])).rowcount
+            # el horario es de cada local: si el que tenían no es del nuevo local, toman el del mismo nombre allá
+            # (o el primero del local), para no quedar sin horario
+            c.execute("""UPDATE employees SET schedule_id=(SELECT COALESCE((SELECT s2.id FROM schedules s2 WHERE s2.local_id=? AND s2.name=(SELECT s1.name FROM schedules s1
+                                 WHERE s1.id=employees.schedule_id) COLLATE NOCASE), (SELECT MIN(id) FROM schedules WHERE local_id=?))) WHERE department_id=? AND schedule_id IS NOT NULL
+                         AND schedule_id NOT IN (SELECT id FROM schedules WHERE local_id=?)""",
+                      (dest["id"], dest["id"], area["id"], dest["id"]))
+            lost = c.execute("SELECT COUNT(*) FROM employees WHERE department_id=? AND schedule_id IS NULL",
+                             (area["id"],)).fetchone()[0]
         db.audit(u["username"], "mover área de local",
                  f"{area['name']} ({n} empleados): {lname(area['local_id'])} → {dest['name']}" + (f"; {lost} sin horario" if lost else ""))
         flash(request, f"Área «{area['name']}» y sus {n} empleados ahora son de {dest['name']}.")
         await _move_on_devices(request, list(moved), moved)
         if lost:
-            flash(request, f"{lost} de esos empleados quedaron sin horario (el suyo era de otro local). "
+            flash(request, f"{lost} de esos empleados no tienen horario. "
                            f"Asígnales un horario de {dest['name']} en Empleados.", "warning")
         return back("/locales#reparto")
     if what == "empleados":
@@ -1503,18 +1516,20 @@ async def locales_move(request: Request):
             no_area = c.execute(f"""UPDATE employees SET department_id=NULL WHERE id IN ({marks}) AND department_id IS NOT NULL
                                     AND department_id NOT IN (SELECT id FROM departments WHERE local_id=?)""",
                                 ids_ + [dest["id"]]).rowcount
-            no_sched = c.execute(f"""UPDATE employees SET schedule_id=NULL WHERE id IN ({marks}) AND schedule_id IS NOT NULL
+            no_sched = c.execute(f"""UPDATE employees SET schedule_id=(SELECT COALESCE((SELECT s2.id FROM schedules s2 WHERE s2.local_id=? AND s2.name=(SELECT s1.name FROM schedules s1
+                                 WHERE s1.id=employees.schedule_id) COLLATE NOCASE), (SELECT MIN(id) FROM schedules WHERE local_id=?))) WHERE id IN ({marks})
+                                     AND schedule_id IS NOT NULL
                                      AND schedule_id NOT IN (SELECT id FROM schedules WHERE local_id=?)""",
-                                 ids_ + [dest["id"]]).rowcount
+                                 [dest["id"], dest["id"]] + ids_ + [dest["id"]]).rowcount
             pending = c.execute(f"SELECT COUNT(*) FROM employees WHERE id IN ({marks}) AND schedule_id IS NULL", ids_).fetchone()[0]
         await _move_on_devices(request, ids_, {r["id"]: r["local_id"] for r in rows})
         names = ", ".join(r["name"] for r in rows[:20]) + (f" y {len(rows) - 20} más" if len(rows) > 20 else "")
         db.audit(u["username"], "mover empleados de local", f"{len(rows)} → {dest['name']}: {names}")
         flash(request, f"{len(rows)} empleado(s) movidos a {dest['name']}."
-                       + (f" A {no_area} se les quitó el área (era de otro local)." if no_area else ""))
+                       + (f" A {no_area} se les quitó el área (era de otro local)." if no_area else "")
+                       + (f" {no_sched} tomaron un horario de {dest['name']} (revísalo en Empleados)." if no_sched else ""))
         if pending:
             flash(request, f"{pending} empleado(s) movidos no tienen horario"
-                           + (f" ({no_sched} lo perdieron por ser de otro local)" if no_sched else "")
                            + f". Asígnales un horario de {dest['name']} en Empleados.", "warning")
         return back("/locales#reparto")
     flash(request, "Acción no válida.", "danger")
