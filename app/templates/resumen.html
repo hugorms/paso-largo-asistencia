@@ -43,6 +43,14 @@
   .rs-delta.up { color: #2c6a39; } .rs-delta.down { color: #94352a; }
   .rs-kpi { display: flex; align-items: center; gap: .7rem; min-width: 0; }
   .rs-kpi .rs-l { font-size: .74rem; color: var(--pl-muted); font-weight: 500; }
+  .rs-absent { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: .5rem; }
+  .rs-person { display: flex; gap: .6rem; align-items: center; padding: .45rem .55rem; border: 1px solid #efefe6; border-radius: .6rem; background: #fcfcf8; }
+  .rs-face { position: relative; flex: none; width: 46px; height: 46px; border-radius: 50%; overflow: hidden; border: 2px solid #f3d6d3; padding: 0;
+             background: var(--pl-olive-100, #eef0e2); color: var(--pl-olive-700, #4d5a26); font-weight: 600; cursor: zoom-in; }
+  .rs-face img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .rs-pname { font-weight: 600; font-size: .9rem; }
+  .rs-pmeta { font-size: .75rem; color: #7a7d6c; }
+  .rs-pdays { font-size: .75rem; margin-top: .1rem; }
   .rs-list { list-style: none; margin: 0; padding: 0; font-size: .86rem; }
   .rs-list li { display: flex; justify-content: space-between; gap: .6rem; padding: .3rem 0; border-bottom: 1px dashed #efefe6; }
   .rs-list li:last-child { border-bottom: 0; }
@@ -154,15 +162,19 @@
       </div>
       <div class="rs-chart mb-3"><canvas data-week="{{ loop.index0 }}"></canvas></div>
       <div class="row g-3">
-        <div class="col-6">
-          <div class="rs-h">Faltaron</div>
-          {% set lst = c.faltas %}
-          <ul class="rs-list">{% for f in lst[:4] %}<li><span>{{ f.name }}</span><span class="badge text-bg-danger">{{ f.dias }} día{{ 's' if f.dias != 1 }}</span></li>
-            {% else %}<li class="text-secondary"><span><i class="bi bi-emoji-smile me-1"></i>Nadie faltó</span></li>{% endfor %}</ul>
-          {% if lst|length > 4 %}<details class="rs-more"><summary>+{{ lst|length - 4 }} más</summary><ul class="rs-list">
-            {% for f in lst[4:] %}<li><span>{{ f.name }}</span><span class="badge text-bg-danger">{{ f.dias }} día{{ 's' if f.dias != 1 }}</span></li>{% endfor %}</ul></details>{% endif %}
+        <div class="col-12">
+          <div class="rs-h">Faltaron esta semana{% if c.faltas %} <span class="badge text-bg-danger ms-1">{{ c.faltas|length }}</span>{% endif %}</div>
+          {% if c.faltas %}<div class="rs-absent">{% for f in c.faltas %}
+            <div class="rs-person" title="Faltó: {{ f.fechas }}">
+              <button type="button" class="rs-face" data-photo="/empleados/{{ f.id }}/rostro" data-label="Foto registrada" data-caption="{{ f.name }} · N° {{ f.no }}" aria-label="Ver foto de {{ f.name }}">
+                <img src="/empleados/{{ f.id }}/rostro" alt="" loading="lazy" onerror="this.remove()"><span>{{ f.name[:1]|upper }}</span></button>
+              <div class="min-w-0"><div class="rs-pname text-truncate">{{ f.name }}</div>
+                <div class="rs-pmeta text-truncate">N° {{ f.no }}{% if f.area %} · {{ f.area }}{% endif %}</div>
+                <div class="rs-pdays"><span class="badge text-bg-danger">{{ f.dias }} día{{ 's' if f.dias != 1 }}</span> <span class="text-secondary">{{ f.fechas }}</span></div></div>
+            </div>{% endfor %}</div>
+          {% else %}<div class="text-secondary small"><i class="bi bi-emoji-smile me-1"></i>Nadie faltó esta semana</div>{% endif %}
         </div>
-        <div class="col-6">
+        <div class="col-12">
           <div class="rs-h">Más tardanzas</div>
           {% set lst = c.tardanzas %}
           <ul class="rs-list">{% for x in lst[:4] %}<li><span title="{{ x.min }} min en total">{{ x.name }}</span><span class="badge text-bg-warning">{{ x.veces }} {{ 'vez' if x.veces == 1 else 'veces' }}</span></li>

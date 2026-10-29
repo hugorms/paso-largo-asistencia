@@ -113,10 +113,20 @@ def delta(now, before):
     return None if now is None or before is None else now - before
 
 
+DOW = "LMMJVSD"
+
+
 def absences(rows, limit=None) -> list[dict]:
-    """Quién faltó y cuántos días, de más a menos."""
-    n = Counter((r["employee_id"], r["name"]) for r in rows if r["status"] == "Ausente")
-    out = [{"name": name, "dias": k} for (_, name), k in sorted(n.items(), key=lambda x: (-x[1], x[0][1]))]
+    """Quién faltó, cuántos días y cuáles, de más a menos (con su N° y área para reconocerlo)."""
+    days, info = defaultdict(list), {}
+    for r in rows:
+        if r["status"] == "Ausente":
+            days[r["employee_id"]].append(r["date"])
+            info[r["employee_id"]] = r
+    out = [{"id": eid, "name": info[eid]["name"], "no": info[eid]["employee_no"], "area": info[eid]["department"],
+            "dias": len(ds), "fechas": ", ".join(f"{DOW[d.weekday()]} {d.day}" for d in sorted(ds))}
+           for eid, ds in days.items()]
+    out.sort(key=lambda x: (-x["dias"], x["name"]))
     return out[:limit] if limit else out
 
 
@@ -223,8 +233,9 @@ def _sheets(data):
         days = [["Local", "Día", "Puntual", "Tarde", "Ausente"]]
         days_body = [[c["name"], s["date"], s["puntual"], s["tarde"], s["ausente"]] for c in data["cards"] for s in c["series"]]
         return [("Semana", head, body, {7, 8}), ("Por día", days[0], days_body, set()),
-                ("Faltas", ["Local", "Empleado", "Días que faltó"],
-                 [[c["name"], f["name"], f["dias"]] for c in data["cards"] for f in c["faltas"]], set()),
+                ("Faltas", ["Local", "N°", "Empleado", "Área", "Días que faltó", "Cuáles"],
+                 [[c["name"], f["no"], f["name"], f["area"], f["dias"], f["fechas"]] for c in data["cards"]
+                  for f in c["faltas"]], set()),
                 ("Tardanzas", ["Local", "Empleado", "Veces tarde", "Minutos tarde"],
                  [[c["name"], t["name"], t["veces"], t["min"]] for c in data["cards"] for t in c["tardanzas"]], set())]
     head = ["Local", "% asistencia", "% asistencia mes anterior", "% puntualidad", "% puntualidad mes anterior",
