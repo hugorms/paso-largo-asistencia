@@ -316,3 +316,17 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
   .fx-mix { flex-basis: 100%; }
   .card-header { flex-wrap: wrap; }
 }
+
+/* ---------- Selector de local (menú) y locales por usuario ---------- */
+.local-pick { margin: 0 .7rem .5rem; padding: .45rem .55rem .55rem; border-radius: .55rem; background: rgba(255, 255, 255, .06); }
+.local-pick label { display: block; font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; color: #a9ae92; margin-bottom: .3rem; }
+.local-pick .form-select { background-color: rgba(255, 255, 255, .1); color: #f1f2ea; border-color: rgba(255, 255, 255, .14);
+  --bs-form-select-bg-img: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23d3d7c1' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e"); }
+.local-pick .form-select:focus { border-color: #a3b46a; box-shadow: 0 0 0 .2rem rgba(163, 180, 106, .25); }
+.local-pick .form-select option { color: var(--pl-ink); background: #fff; }
+.local-one { color: #e4e7d6; font-size: .86rem; font-weight: 500; }
+.local-one .bi { color: #a3b46a; }
+.user-locales { display: flex; flex-wrap: wrap; gap: .1rem .2rem; max-width: 320px; }
+.user-locales .all-locales { display: none; }
+.user-locales.is-admin .form-check { display: none; }
+.user-locales.is-admin .all-locales { display: block; }

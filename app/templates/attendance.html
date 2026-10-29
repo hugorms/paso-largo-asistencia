@@ -9,12 +9,12 @@
       <a class="btn btn-outline-secondary btn-icon" href="?fecha={{ next }}&dep={{ dep }}" title="Día siguiente"><i class="bi bi-chevron-right"></i></a>
     </div>
     <input type="date" name="fecha" value="{{ d }}" class="form-control w-auto" onchange="this.form.submit()">
-    <select name="dep" class="form-select w-auto" onchange="this.form.submit()"><option value="">Todos los departamentos</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if dep|string == dp.id|string }}>{{ dp.name }}</option>{% endfor %}</select>
-    {% if u.role in ['admin','supervisor'] %}<button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#manual"><i class="bi bi-plus-lg"></i> Marca manual</button>{% endif %}
+    <select name="dep" class="form-select w-auto" onchange="this.form.submit()"><option value="">Todas las áreas</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if dep|string == dp.id|string }}>{{ dp.name }}</option>{% endfor %}</select>
+    {% if u.role in ['admin','encargado'] %}<button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#manual"><i class="bi bi-plus-lg"></i> Marca manual</button>{% endif %}
   </form>
 </div>
 <div class="card"><div class="table-responsive table-wrap"><table class="table table-hover align-middle">
-<thead><tr><th>N°</th><th>Empleado</th><th>Departamento</th><th>Horario</th><th>Entrada</th><th>Salida</th><th>Tardanza</th><th>Horas</th><th>Estado</th><th>Observación</th></tr></thead>
+<thead><tr><th>N°</th><th>Empleado</th><th>Área</th><th>Horario</th><th>Entrada</th><th>Salida</th><th>Tardanza</th><th>Horas</th><th>Estado</th><th>Observación</th></tr></thead>
 <tbody id="attrows" {{ 'data-live' if d >= today() }}>
 {% for r in rows %}
 <tr><td class="mono text-secondary">{{ r.employee_no }}</td><td><a href="/reportes?emp={{ r.employee_id }}&vista=detalle" class="fw-medium">{{ r.name }}</a></td><td>{{ r.department or '—' }}</td><td class="small text-secondary">{{ r.schedule }}</td>

@@ -3,8 +3,8 @@
 <div class="page-head">
   <div><div class="small"><a href="/empleados"><i class="bi bi-arrow-left"></i> Empleados</a></div><h1>{{ e.name if e.id else 'Nuevo empleado' }}</h1>{% if e.id %}<div class="sub">N° {{ e.employee_no }}</div>{% endif %}</div>
   {% if e.id %}<div class="page-actions">
-    <form method="post" action="/empleados/{{ e.id }}/sincronizar"><button class="btn btn-outline-secondary"><i class="bi bi-arrow-repeat"></i> Reenviar a equipos</button></form>
-    {% if u.role == 'admin' %}<form method="post" action="/empleados/{{ e.id }}/eliminar" onsubmit="return confirm('¿Dar de baja a {{ e.name }} y borrarlo de los equipos? Su historial de asistencia se conserva.')"><button class="btn btn-outline-danger"><i class="bi bi-person-dash"></i> Dar de baja</button></form>{% endif %}
+    <form method="post" action="/empleados/{{ e.id }}/sincronizar"><button class="btn btn-outline-secondary"><i class="bi bi-arrow-repeat"></i> Reenviar a equipos del local</button></form>
+    {% if u.role in ['admin','encargado'] %}<form method="post" action="/empleados/{{ e.id }}/eliminar" onsubmit="return confirm('¿Dar de baja a {{ e.name }} y borrarlo de los equipos? Su historial de asistencia se conserva.')"><button class="btn btn-outline-danger"><i class="bi bi-person-dash"></i> Dar de baja</button></form>{% endif %}
   </div>{% endif %}
 </div>
 <form method="post" action="/empleados/guardar" enctype="multipart/form-data">
@@ -12,15 +12,20 @@
 <div class="row g-3 align-items-start">
   <div class="col-lg-8"><div class="card"><div class="card-header">Datos</div><div class="card-body">
     <div class="row g-3">
-    <div class="col-md-4"><label class="form-label">N° de empleado *</label><input name="employee_no" value="{{ e.employee_no or '' }}" class="form-control mono" required pattern="[A-Za-z0-9]{1,32}" title="Solo letras y números"><div class="form-text">ID con el que el equipo lo reconoce.</div></div>
+    {% if pick_local %}<div class="col-12"><label class="form-label">Local *</label><select name="local_id" id="localSel" class="form-select" required>
+      {% if e.local_id is none or local_opts|selectattr('id','equalto',e.local_id)|list|length == 0 %}<option value="">Elige el local…</option>{% endif %}
+      {% for lo in local_opts %}<option value="{{ lo.id }}" {{ 'selected' if lo.id == e.local_id }}>{{ lo.name }}</option>{% endfor %}</select>
+      <div class="form-text">Se envía a los biométricos de ese local. Área y horario son de cada local.</div></div>
+    {% elif e.local_id is not none %}<input type="hidden" name="local_id" value="{{ e.local_id }}">{% endif %}
+    <div class="col-md-4"><label class="form-label">N° de empleado *</label><input name="employee_no" value="{{ e.employee_no or '' }}" class="form-control mono" required pattern="[A-Za-z0-9]{1,32}" title="Solo letras y números"><div class="form-text">ID con el que el equipo lo reconoce. Único en toda la empresa.</div></div>
     <div class="col-md-8"><label class="form-label">Nombre completo *</label><input name="name" value="{{ e.name or '' }}" class="form-control" required maxlength="32"><div class="form-text">Máximo 32 caracteres (límite del equipo).</div></div>
     <div class="col-md-4"><label class="form-label">Documento</label><input name="document" value="{{ e.document or '' }}" class="form-control"></div>
-    <div class="col-md-4"><label class="form-label">Departamento</label><select name="department_id" class="form-select"><option value="">—</option>{% for dp in departments %}<option value="{{ dp.id }}" {{ 'selected' if e.department_id == dp.id }}>{{ dp.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-4"><label class="form-label">Área</label><select name="department_id" class="form-select"><option value="">—</option>{% for dp in departments %}<option value="{{ dp.id }}" data-local="{{ dp.local_id }}" {{ 'selected' if e.department_id == dp.id }}>{{ dp.name }}</option>{% endfor %}</select></div>
     <div class="col-md-4"><label class="form-label">Cargo</label><input name="position" value="{{ e.position or '' }}" class="form-control"></div>
     <div class="col-md-4"><label class="form-label">Email</label><input type="email" name="email" value="{{ e.email or '' }}" class="form-control"></div>
     <div class="col-md-4"><label class="form-label">Teléfono</label><input name="phone" value="{{ e.phone or '' }}" class="form-control"></div>
     <div class="col-md-4"><label class="form-label">Género</label><select name="gender" class="form-select">{% for v,l in [('unknown','No indica'),('male','Masculino'),('female','Femenino')] %}<option value="{{ v }}" {{ 'selected' if e.gender == v }}>{{ l }}</option>{% endfor %}</select></div>
-    <div class="col-md-6"><label class="form-label">Horario</label><select name="schedule_id" class="form-select"><option value="">Sin horario (no controla tardanzas)</option>{% for s in schedules %}<option value="{{ s.id }}" {{ 'selected' if e.schedule_id == s.id or (not e.id and loop.first) }}>{{ s.name }} · {{ s.start_time }}–{{ s.end_time }}</option>{% endfor %}</select></div>
+    <div class="col-md-6"><label class="form-label">Horario</label><select name="schedule_id" class="form-select"><option value="">Sin horario (no controla tardanzas)</option>{% for s in schedules %}<option value="{{ s.id }}" data-local="{{ s.local_id }}" {{ 'selected' if e.schedule_id == s.id or (not e.id and not e.schedule_id and s.local_id == e.local_id and s == (schedules|selectattr('local_id','equalto',e.local_id)|first)) }}>{{ s.name }} · {{ s.start_time }}–{{ s.end_time }}</option>{% endfor %}</select></div>
     <div class="col-md-3"><label class="form-label">Fecha de ingreso</label><input type="date" name="hire_date" value="{{ e.hire_date or '' }}" class="form-control"></div>
     <div class="col-md-3 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="active" value="1" id="act" {{ 'checked' if e.active }}><label class="form-check-label" for="act">Activo</label></div></div>
     </div>
@@ -56,6 +61,20 @@
 {% endblock %}
 {% block scripts %}
 <script>
+// Área y horario: solo los del local elegido
+const localSel = document.getElementById('localSel');
+if (localSel) {
+  const filt = () => document.querySelectorAll('select[name=department_id] option[data-local], select[name=schedule_id] option[data-local]').forEach(o => {
+    const ok = o.dataset.local === localSel.value; o.hidden = !ok; o.disabled = !ok;
+    if (!ok && o.selected) o.parentElement.value = '';
+  });
+  const sch = document.querySelector('select[name=schedule_id]');
+  localSel.addEventListener('change', () => {
+    filt();
+    {% if not e.id %}const first = sch.querySelector('option[data-local="' + localSel.value + '"]'); if (first && !sch.value) sch.value = first.value;{% endif %}
+  });
+  filt();
+}
 const photo = document.getElementById('photo'), photoCam = document.getElementById('photoCam'), photoData = document.getElementById('photoData');
 const preview = document.getElementById('preview'), cam = document.getElementById('cam'), ph = document.getElementById('ph'), shotBtn = document.getElementById('shotBtn');
 const show = el => { [preview, cam].forEach(x => x.classList.add('d-none')); if (ph) ph.classList.add('d-none'); el.classList.remove('d-none'); };

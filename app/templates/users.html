@@ -2,18 +2,21 @@
 {% block content %}
 <div class="page-head"><div><h1>Usuarios del sistema</h1><div class="sub">Quién puede entrar a Paso Largo y qué puede hacer</div></div></div>
 <div class="row g-3 mb-3">
-  {% for k, i, t in [('admin','shield-check','Todo, incluidos equipos y usuarios'),('supervisor','person-gear','Empleados, asistencia, permisos y horarios'),('consulta','eye','Solo ver panel, asistencia y reportes')] %}
+  {% for k, i, t in [('admin','shield-check','Todos los locales: equipos, usuarios, locales, feriados, respaldos y ajustes'),('encargado','person-gear','En sus locales: empleados, asistencia, permisos, horarios y biométricos'),('consulta','eye','En sus locales: solo ver panel, asistencia y reportes')] %}
   <div class="col-md-4"><div class="card stat"><div class="d-flex gap-3 align-items-center"><div class="ico ico-primary"><i class="bi bi-{{ i }}"></i></div><div><div class="fw-semibold">{{ roles[k] }}</div><div class="small text-secondary">{{ t }}</div></div></div></div></div>
   {% endfor %}
 </div>
 {% for x in users + [{}] %}<form method="post" id="uf{{ loop.index }}"><input type="hidden" name="id" value="{{ x.id or '' }}"></form>{% endfor %}
+{% set faltan = users|selectattr('sin_local')|list %}
+{% if faltan %}<div class="alert alert-warning py-2"><i class="bi bi-exclamation-triangle"></i> {{ faltan|length }} usuario(s) sin local: {{ faltan|map(attribute='username')|join(', ') }}. No pueden ver nada hasta que les marques al menos un local.</div>{% endif %}
 <div class="card mb-4"><div class="table-responsive table-wrap"><table class="table align-middle">
-<thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Contraseña</th><th>Activo</th><th></th></tr></thead><tbody>
+<thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Locales</th><th>Contraseña</th><th>Activo</th><th></th></tr></thead><tbody>
 {% for x in users + [{}] %}
 {% set f = 'uf' ~ loop.index %}<tr{% if not x.id %} class="table-light"{% endif %}>
-  <td>{% if x.id %}<span class="fw-medium">{{ x.username }}</span>{% else %}<input form="{{ f }}" name="username" class="form-control form-control-sm" required placeholder="Nuevo usuario">{% endif %}</td>
+  <td>{% if x.id %}<span class="fw-medium">{{ x.username }}</span>{% if x.sin_local %} <span class="badge text-bg-warning" title="No puede ver nada hasta que le asignes un local">Sin local</span>{% endif %}{% else %}<input form="{{ f }}" name="username" class="form-control form-control-sm" required placeholder="Nuevo usuario">{% endif %}</td>
   <td><input form="{{ f }}" name="full_name" value="{{ x.full_name or '' }}" class="form-control form-control-sm" placeholder="Nombre"></td>
   <td><select form="{{ f }}" name="role" class="form-select form-select-sm" style="min-width:150px">{% for k,v in roles.items() %}<option value="{{ k }}" {{ 'selected' if x.role == k or (not x.id and k == 'consulta') }}>{{ v }}</option>{% endfor %}</select></td>
+  <td><div class="user-locales" data-role-of="{{ f }}">{% for l in locales %}<div class="form-check form-check-inline mb-0"><input class="form-check-input" form="{{ f }}" type="checkbox" name="locales" value="{{ l.id }}" id="{{ f }}l{{ l.id }}" {{ 'checked' if l.id in (x.locales or []) or (not x.id and locales|length == 1) }}><label class="form-check-label small" for="{{ f }}l{{ l.id }}">{{ l.name }}</label></div>{% else %}<span class="small text-secondary">Crea un local primero</span>{% endfor %}<div class="small text-secondary all-locales">Todos los locales</div></div></td>
   <td><input form="{{ f }}" type="password" name="password" class="form-control form-control-sm" autocomplete="new-password" placeholder="{{ 'Nueva (opcional)' if x.id else 'Mín. 8 caracteres' }}" {{ '' if x.id else 'required minlength=8' }}></td>
   <td>{% if x.id %}<div class="form-check form-switch mb-0"><input class="form-check-input" form="{{ f }}" type="checkbox" role="switch" name="active" value="1" {{ 'checked' if x.active }}></div>{% else %}—{% endif %}</td>
   <td class="text-end"><button form="{{ f }}" class="btn btn-sm {{ 'btn-outline-primary' if x.id else 'btn-primary' }}">{% if x.id %}<i class="bi bi-check2"></i> Guardar{% else %}<i class="bi bi-person-plus"></i> Crear{% endif %}</button></td>
@@ -25,3 +28,14 @@
 {% for a in log %}<tr><td class="text-nowrap mono small">{{ a.ts }}</td><td>{{ a.username }}</td><td>{{ a.action }}</td><td class="small text-secondary text-break">{{ a.detail }}</td></tr>{% else %}<tr><td colspan="4" class="empty">Sin movimientos.</td></tr>{% endfor %}
 </tbody></table></div></div>
 {% endblock %}
+{% block scripts %}<script>
+// El admin ve todos los locales: sus casillas no hacen falta. Encargado y consulta necesitan al menos uno.
+document.querySelectorAll('.user-locales').forEach(box => {
+  const form = document.getElementById(box.dataset.roleOf), sel = document.querySelector(`select[form="${box.dataset.roleOf}"][name="role"]`);  // form.id sería el campo oculto «id»
+  const sync = () => box.classList.toggle('is-admin', sel.value === 'admin');
+  sel.addEventListener('change', sync); sync();
+  form.addEventListener('submit', ev => {
+    if (sel.value !== 'admin' && !box.querySelector('input:checked')) { ev.preventDefault(); alert('Marca al menos un local para este usuario.'); }
+  });
+});
+</script>{% endblock %}

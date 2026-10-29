@@ -1,13 +1,14 @@
 {% extends "base.html" %}{% block title %}Horarios y ajustes{% endblock %}
 {% block content %}
-<div class="page-head"><div><h1>Horarios y ajustes</h1><div class="sub">Turnos, feriados, departamentos y opciones generales</div></div></div>
+<div class="page-head"><div><h1>Horarios y ajustes</h1><div class="sub">{% if u.role == 'admin' %}Turnos, feriados, áreas y opciones generales{% else %}Turnos y áreas{% endif %}{% if local_now %} · {{ local_now.name }}{% endif %}</div></div></div>
 <div class="row g-3 align-items-start">
 <div class="col-xl-8">
   <div class="card mb-3"><div class="card-header">Horarios</div><div class="card-body">
-  {% for s in schedules + [{}] %}
+  {% for s in schedules + ([{}] if new_local else []) %}
   <form method="post" action="/configuracion/horario" class="{{ 'border-bottom pb-3 mb-3' if not loop.last }}">
     <input type="hidden" name="id" value="{{ s.id or '' }}">
-    {% if not s.id %}<div class="fw-semibold small text-uppercase text-secondary mb-2">Nuevo horario</div>{% endif %}
+    {% if not s.id %}<div class="fw-semibold small text-uppercase text-secondary mb-2">Nuevo horario{% if not local_now %} en {{ local_names.get(new_local, '') }}{% endif %}</div>
+    {% elif not local_now %}<div class="small text-secondary mb-1"><i class="bi bi-shop"></i> {{ local_names.get(s.local_id, 'Sin local') }}</div>{% endif %}
     <div class="row g-2 align-items-end">
       <div class="col-md-3"><label class="form-label">Nombre</label><input name="name" value="{{ s.name or '' }}" class="form-control" required placeholder="Ej.: Turno mañana"></div>
       <div class="col-6 col-md-2"><label class="form-label">Entrada</label><input type="time" name="start_time" value="{{ s.start_time or '08:00' }}" class="form-control" required></div>
@@ -33,22 +34,26 @@
     </div>
   </form>
   {% endfor %}
+  {% if not new_local %}<div class="alert alert-info small mb-0"><i class="bi bi-shop"></i> Para crear un horario, elige un local arriba en el menú.</div>{% endif %}
   <p class="form-text mb-0 mt-3"><i class="bi bi-info-circle"></i> Tardanza = entrada después de la hora de inicio más la tolerancia. El refrigerio se descuenta si la jornada supera 5 horas. Los días sin marcar son libres.<br>
     <i class="bi bi-clock-history"></i> Entrada = primera marca del día y salida = la última, aunque sea fuera de las ventanas (así se ven las tardanzas, salidas tempranas y horas extra). Las marcas del medio (ej.: a las 12:00) quedan en Marcaciones pero no cuentan. Las ventanas sirven para saber si una marca suelta es entrada o salida, y se mueven solas si cambias la hora de entrada o salida.</p>
   </div></div>
-  <div class="card"><div class="card-header">Feriados</div><div class="card-body border-bottom">
+  {% if u.role == 'admin' %}
+  <div class="card"><div class="card-header">Feriados <span class="small fw-normal text-secondary">valen para todos los locales</span></div><div class="card-body border-bottom">
     <form method="post" action="/configuracion/feriado" class="row g-2"><div class="col-md-4"><input type="date" name="date" class="form-control" required></div>
       <div class="col-md-5"><input name="name" placeholder="Descripción (ej.: Día de la Independencia)" class="form-control"></div><div class="col-md-3"><button class="btn btn-primary w-100"><i class="bi bi-plus-lg"></i> Agregar</button></div></form></div>
     <div class="table-responsive"><table class="table align-middle">{% for h in holidays %}<tr><td class="mono" style="width:140px">{{ h.date[8:10] }}/{{ h.date[5:7] }}/{{ h.date[:4] }}</td><td>{{ h.name or '—' }}</td><td class="text-end"><form method="post" action="/configuracion/feriado-eliminar" onsubmit="return confirm('¿Quitar este feriado? Ese día volverá a contar faltas.')"><input type="hidden" name="id" value="{{ h.id }}"><button class="btn btn-sm btn-outline-danger btn-icon" title="Quitar"><i class="bi bi-x-lg"></i></button></form></td></tr>{% else %}<tr><td class="empty"><i class="bi bi-calendar-heart"></i>Sin feriados registrados.</td></tr>{% endfor %}</table></div>
   </div>
+  {% endif %}
 </div>
 <div class="col-xl-4">
-  <div class="card mb-3"><div class="card-header">Departamentos</div><div class="card-body border-bottom">
-    <datalist id="sedes-list">{% for s in sedes %}<option value="{{ s }}">{% endfor %}</datalist>
-    <form method="post" action="/configuracion/departamento" class="d-flex gap-2"><input name="name" class="form-control" required placeholder="Nuevo departamento"><input name="sede" class="form-control" list="sedes-list" placeholder="Local (ej. Paso Largo)" title="Local al que pertenece: avisa si su gente marca en el biométrico de otro local"><button class="btn btn-primary btn-icon" title="Agregar"><i class="bi bi-plus-lg"></i></button></form></div>
+  <div class="card mb-3"><div class="card-header">Áreas</div>
+    {% if new_local %}<div class="card-body border-bottom">
+    <form method="post" action="/configuracion/departamento" class="d-flex gap-2"><input name="name" class="form-control" required placeholder="Nueva área{{ ' en ' ~ local_names.get(new_local, '') if not local_now }}" aria-label="Nueva área"><button class="btn btn-primary btn-icon" title="Agregar"><i class="bi bi-plus-lg"></i></button></form></div>
+    {% else %}<div class="card-body border-bottom small text-secondary"><i class="bi bi-shop"></i> Para crear un área, elige un local arriba en el menú.</div>{% endif %}
     <ul class="list-group list-group-flush">{% for dp in departments %}<li class="list-group-item d-flex justify-content-between align-items-center gap-2"><span class="flex-grow-1">{{ dp.name }}</span>
-      <form method="post" action="/configuracion/departamento-sede" class="d-flex" title="Local al que pertenece este departamento"><input type="hidden" name="id" value="{{ dp.id }}"><input name="sede" value="{{ dp.sede or '' }}" list="sedes-list" class="form-control form-control-sm" style="max-width:9rem" placeholder="Local" onchange="this.form.submit()" aria-label="Local de {{ dp.name }}"></form>
-      <form method="post" action="/configuracion/departamento-eliminar" onsubmit="return confirm('¿Quitar {{ dp.name }}?')"><input type="hidden" name="id" value="{{ dp.id }}"><button class="btn btn-sm btn-outline-danger btn-icon" title="Quitar"><i class="bi bi-x-lg"></i></button></form></li>{% else %}<li class="list-group-item empty"><i class="bi bi-diagram-3"></i>Sin departamentos.</li>{% endfor %}</ul>
+      {% if not local_now %}<span class="small text-secondary">{{ local_names.get(dp.local_id, 'Sin local') }}</span>{% endif %}
+      <form method="post" action="/configuracion/departamento-eliminar" onsubmit="return confirm('¿Quitar {{ dp.name }}?')"><input type="hidden" name="id" value="{{ dp.id }}"><button class="btn btn-sm btn-outline-danger btn-icon" title="Quitar"><i class="bi bi-x-lg"></i></button></form></li>{% else %}<li class="list-group-item empty"><i class="bi bi-diagram-3"></i>Sin áreas.</li>{% endfor %}</ul>
   </div>
   {% if u.role == 'admin' %}
   <div class="card"><div class="card-header">General</div><div class="card-body">

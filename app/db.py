@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL,
     tolerance_min INTEGER DEFAULT 10, lunch_min INTEGER DEFAULT 0, days TEXT DEFAULT '1,2,3,4,5'
 );
-CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL);
+CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY, name TEXT NOT NULL, sede TEXT, local_id INTEGER);
 CREATE TABLE IF NOT EXISTS employees (
     id INTEGER PRIMARY KEY, employee_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
     document TEXT, department_id INTEGER REFERENCES departments(id), position TEXT,
@@ -62,7 +62,19 @@ CREATE TABLE IF NOT EXISTS audit (
     action TEXT, detail TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS locales (
+    id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS user_locales (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    local_id INTEGER NOT NULL REFERENCES locales(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, local_id)
+);
 """
+
+# Tablas que pertenecen a un local (finca, departamento o negocio)
+LOCAL_TABLES = ("devices", "departments", "employees", "schedules")
 
 
 def connect():
@@ -187,9 +199,92 @@ def _merge_duplicate_devices(c):
     merge_same_serial(c)
 
 
+def _departments_unique_per_local():
+    """El nombre de un área (departamento) era único en todo el sistema; ahora solo dentro de cada local,
+    para que dos fincas puedan tener cada una su «Cocina». SQLite no deja quitar un UNIQUE: se rehace la tabla."""
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='departments'").fetchone()
+        if not ddl or "UNIQUE NOT NULL" not in ddl[0]:
+            return
+        conn.execute("PRAGMA foreign_keys = OFF")  # los empleados apuntan a departments(id): los id se conservan
+        cols = ", ".join(r[1] for r in conn.execute("PRAGMA table_info(departments)"))
+        conn.executescript(f"""BEGIN;
+            CREATE TABLE departments_new (id INTEGER PRIMARY KEY, name TEXT NOT NULL, sede TEXT, local_id INTEGER);
+            INSERT INTO departments_new ({cols}) SELECT {cols} FROM departments;
+            DROP TABLE departments;
+            ALTER TABLE departments_new RENAME TO departments;
+            COMMIT;""")
+    finally:
+        conn.close()
+
+
+def _auto_backup(tag):
+    """Respaldo completo antes de un cambio grande de la base de datos (queda en datos/respaldos/)."""
+    from datetime import datetime
+    if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
+        return
+    folder = DATA_DIR / "respaldos"
+    folder.mkdir(exist_ok=True)
+    (folder / f"{tag}-{datetime.now():%Y%m%d-%H%M%S}.zip").write_bytes(backup_zip())
+
+
+def _migrate_locales(c):
+    """Primera vez con locales: reparte lo que ya existe sin perder nada.
+    - Un local por cada nombre escrito en el campo «Local» de equipos y departamentos (o uno con el nombre de la empresa).
+    - Equipos y departamentos van a su local; los que no tenían local, al primero.
+    - Empleados: al local de su departamento; si no tienen, al del equipo donde más marcan; si no, al primero.
+    - Horarios: a cada local que los usa (si los usan varios locales, cada uno queda con su propia copia).
+    - Usuarios «supervisor» pasan a «encargado»; los que no son admin quedan sin local hasta que el admin les asigne uno."""
+    for table in LOCAL_TABLES:
+        if "local_id" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN local_id INTEGER REFERENCES locales(id)")
+    names = [r[0] for r in c.execute("""SELECT MIN(trim(sede)) FROM (SELECT sede FROM devices UNION ALL SELECT sede FROM departments)
+                                        WHERE COALESCE(trim(sede),'')<>'' GROUP BY lower(trim(sede)) ORDER BY 1""")]
+    if not names:
+        company = c.execute("SELECT value FROM settings WHERE key='company'").fetchone()
+        names = [(company[0] if company and company[0] else None) or "Paso Largo"]
+    for n in names:
+        c.execute("INSERT OR IGNORE INTO locales(name) VALUES (?)", (n,))
+    first = c.execute("SELECT id FROM locales ORDER BY id").fetchone()[0]
+    for table in ("devices", "departments"):
+        c.execute(f"""UPDATE {table} SET local_id=COALESCE(
+                          (SELECT id FROM locales l WHERE l.name=trim({table}.sede) COLLATE NOCASE), ?)""", (first,))
+    c.execute("""UPDATE employees SET local_id=(SELECT d.local_id FROM departments d WHERE d.id=employees.department_id)
+                 WHERE department_id IS NOT NULL""")
+    c.execute("""UPDATE employees SET local_id=(
+                     SELECT d.local_id FROM events ev JOIN devices d ON d.id=ev.device_id
+                     WHERE ev.employee_no=employees.employee_no GROUP BY d.local_id ORDER BY COUNT(*) DESC LIMIT 1)
+                 WHERE local_id IS NULL""")
+    c.execute("UPDATE employees SET local_id=? WHERE local_id IS NULL", (first,))
+    for sid, in c.execute("SELECT id FROM schedules").fetchall():
+        used = [r[0] for r in c.execute("SELECT DISTINCT local_id FROM employees WHERE schedule_id=? ORDER BY local_id",
+                                        (sid,))] or [first]
+        c.execute("UPDATE schedules SET local_id=? WHERE id=?", (used[0], sid))
+        for lid in used[1:]:
+            c.execute("""INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days,in_from,in_to,
+                         out_from,out_to,local_id) SELECT name,start_time,end_time,tolerance_min,lunch_min,days,in_from,
+                         in_to,out_from,out_to,? FROM schedules WHERE id=?""", (lid, sid))
+            c.execute("UPDATE employees SET schedule_id=? WHERE schedule_id=? AND local_id=?",
+                      (c.execute("SELECT last_insert_rowid()").fetchone()[0], sid, lid))
+    c.execute("UPDATE users SET role='encargado' WHERE role='supervisor'")
+    c.execute("INSERT INTO audit(username, action, detail) VALUES ('sistema', 'locales creados', ?)", (", ".join(names),))
+
+
 def init():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+    first_locales = False
+    if DB_PATH.exists():
+        probe = sqlite3.connect(DB_PATH, timeout=30)
+        try:
+            cols = {r[1] for r in probe.execute("PRAGMA table_info(employees)")}
+            first_locales = bool(cols) and "local_id" not in cols
+        finally:
+            probe.close()
+    if first_locales:
+        _auto_backup("antes-de-locales")
+    _departments_unique_per_local()
     with tx() as c:
         c.executescript(SCHEMA)
         cols = {r[1] for r in c.execute("PRAGMA table_info(employees)")}
@@ -210,14 +305,16 @@ def init():
             if "sede" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN sede TEXT")
         _merge_duplicate_devices(c)
+        if "local_id" not in {r[1] for r in c.execute("PRAGMA table_info(employees)")}:
+            _migrate_locales(c)
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_devices_host_port ON devices(host, port)")
         if not c.execute("SELECT 1 FROM users").fetchone():
             c.execute("INSERT INTO users(username, full_name, password_hash, role) VALUES (?,?,?,?)",
                       ("admin", "Administrador", hash_password(os.environ.get("ADMIN_PASSWORD") or "admin123"), "admin"))
         if not c.execute("SELECT 1 FROM schedules").fetchone():
             c.execute("INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days,"
-                      "in_from,in_to,out_from,out_to) VALUES ('Oficina L-V','08:00','17:00',10,60,'1,2,3,4,5',"
-                      "'06:30','09:30','17:00','20:00')")
+                      "in_from,in_to,out_from,out_to,local_id) VALUES ('Oficina L-V','08:00','17:00',10,60,'1,2,3,4,5',"
+                      "'06:30','09:30','17:00','20:00',(SELECT MIN(id) FROM locales))")
         c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('company','Paso Largo')")
         c.execute("UPDATE settings SET value='Paso Largo' WHERE key='company' AND value='Mi Empresa'")
         c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('poll_seconds','5')")

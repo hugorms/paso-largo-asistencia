@@ -1,0 +1,123 @@
+{% extends "base.html" %}{% block title %}Locales{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Locales</h1><div class="sub">Cada local tiene sus biométricos, áreas, horarios y empleados. Encargados y consulta solo ven los locales que les asignes.</div></div></div>
+{% if sin_local or nulls %}
+<div class="alert alert-warning py-2">
+  <i class="bi bi-exclamation-triangle"></i> <b>Revisa el reparto.</b>
+  {% if sin_local %}<div>Usuarios sin local (no pueden ver nada): {{ sin_local|map(attribute='username')|join(', ') }}. <a href="/usuarios">Asígnales uno en Usuarios</a>.</div>{% endif %}
+  {% if nulls %}<div>Datos sin local (solo los ve el administrador):
+    {% for k, n in nulls.items() %}{{ n }} {{ k }}{{ ', ' if not loop.last }}{% endfor %}. Muévelos abajo a un local.</div>{% endif %}
+</div>
+{% endif %}
+{% set lname = {} %}{% for l in locales %}{% set _ = lname.update({l.id: l.name}) %}{% endfor %}
+{% macro dest_select(form_id, current) %}
+<select form="{{ form_id }}" name="destino" class="form-select form-select-sm" required>
+  <option value="">Mover a…</option>
+  {% for l in locales if l.active and l.id != current %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}
+</select>
+{% endmacro %}
+{% macro where(lid) %}{% if lid %}{{ lname.get(lid, '?') }}{% else %}<span class="badge text-bg-warning">Sin local</span>{% endif %}{% endmacro %}
+
+<div class="card mb-4"><div class="table-responsive table-wrap"><table class="table align-middle">
+<thead><tr><th>Local</th><th>Biométricos</th><th>Empleados activos</th><th>Áreas</th><th>Usuarios</th><th>Estado</th><th></th></tr></thead><tbody>
+{% for l in locales %}
+<tr{% if not l.active %} class="text-secondary"{% endif %}>
+  <td><form method="post" action="/locales" class="d-flex gap-1" style="min-width:200px"><input type="hidden" name="action" value="renombrar"><input type="hidden" name="id" value="{{ l.id }}">
+    <input name="name" value="{{ l.name }}" class="form-control form-control-sm" required maxlength="60" aria-label="Nombre del local">
+    <button class="btn btn-sm btn-outline-primary" title="Guardar nombre"><i class="bi bi-check2"></i></button></form></td>
+  <td>{% if l.dev_total %}<span class="{{ 'text-success' if l.dev_online == l.dev_total else 'text-warning-emphasis' }}"><i class="bi bi-circle-fill" style="font-size:.5rem;vertical-align:middle"></i> {{ l.dev_online }}</span> en línea / {{ l.dev_total }}{% else %}<span class="text-secondary">—</span>{% endif %}</td>
+  <td>{{ l.emps }}</td>
+  <td>{{ l.areas }}</td>
+  <td>{{ l.users }}</td>
+  <td>{% if l.active %}<span class="badge text-bg-success">Activo</span>{% else %}<span class="badge text-bg-secondary">Inactivo</span>{% endif %}</td>
+  <td class="text-end"><form method="post" action="/locales"><input type="hidden" name="id" value="{{ l.id }}">
+    {% if l.active %}<button name="action" value="desactivar" class="btn btn-sm btn-outline-secondary" data-confirm="¿Desactivar {{ l.name }}? Nadie lo verá en el menú, pero sus datos se conservan."><i class="bi bi-pause-circle"></i> Desactivar</button>
+    {% else %}<button name="action" value="activar" class="btn btn-sm btn-outline-primary"><i class="bi bi-play-circle"></i> Activar</button>{% endif %}
+  </form></td>
+</tr>
+{% endfor %}
+<tr class="table-light">
+  <td colspan="7"><form method="post" action="/locales" class="d-flex gap-2 flex-wrap"><input type="hidden" name="action" value="crear">
+    <input name="name" class="form-control form-control-sm" style="max-width:280px" required maxlength="60" placeholder="Nombre del nuevo local">
+    <button class="btn btn-sm btn-primary"><i class="bi bi-plus-lg"></i> Crear local</button></form></td>
+</tr>
+</tbody></table></div></div>
+
+<h2 class="h5 mb-1" id="reparto">Revisar reparto</h2>
+<p class="small text-secondary mb-3">Pasa un biométrico, un área o empleados a otro local. Al mover un área se van con ella sus empleados.
+Al mover empleados sueltos se les quita el área y el horario si no son del nuevo local (habrá que asignarles un horario).</p>
+<div class="local-filter d-flex gap-2 flex-wrap mb-3">
+  <select id="fLocal" class="form-select form-select-sm" style="max-width:220px" aria-label="Filtrar por local">
+    <option value="">Todos los locales</option>
+    {% for l in locales %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}
+    {% if nulls %}<option value="0">Sin local</option>{% endif %}
+  </select>
+</div>
+<div class="row g-3">
+  <div class="col-lg-6"><div class="card h-100"><div class="card-header">Biométricos <span class="small text-secondary fw-normal">{{ devs|length }}</span></div>
+    <div class="table-responsive table-wrap" style="max-height:360px"><table class="table table-sm align-middle mb-0 reparto">
+    <thead class="sticky-top"><tr><th>Biométrico</th><th>Local</th><th>Mover a</th></tr></thead><tbody>
+    {% for d in devs %}{% set fid = 'md' ~ d.id %}
+    <tr data-local="{{ d.local_id or 0 }}"><td><span class="fw-medium">{{ d.name }}</span> <span class="small text-secondary mono">{{ d.host }}</span>{% if not d.active %} <span class="badge text-bg-secondary">pausado</span>{% elif not d.online %} <span class="badge text-bg-light">sin conexión</span>{% endif %}</td>
+      <td>{{ where(d.local_id) }}</td>
+      <td><form method="post" action="/locales/mover" id="{{ fid }}" class="d-flex gap-1"><input type="hidden" name="que" value="dispositivo"><input type="hidden" name="id" value="{{ d.id }}">{{ dest_select(fid, d.local_id) }}<button class="btn btn-sm btn-outline-primary" title="Mover"><i class="bi bi-arrow-right"></i></button></form></td></tr>
+    {% else %}<tr><td colspan="3" class="empty">Sin biométricos.</td></tr>{% endfor %}
+    </tbody></table></div></div></div>
+  <div class="col-lg-6"><div class="card h-100"><div class="card-header">Áreas <span class="small text-secondary fw-normal">{{ areas|length }} · se mueven con sus empleados</span></div>
+    <div class="table-responsive table-wrap" style="max-height:360px"><table class="table table-sm align-middle mb-0 reparto">
+    <thead class="sticky-top"><tr><th>Área</th><th>Local</th><th>Mover a</th></tr></thead><tbody>
+    {% for a in areas %}{% set fid = 'ma' ~ a.id %}
+    <tr data-local="{{ a.local_id or 0 }}"><td><span class="fw-medium">{{ a.name }}</span> <span class="small text-secondary">{{ a.emps }} empl.</span></td>
+      <td>{{ where(a.local_id) }}</td>
+      <td><form method="post" action="/locales/mover" id="{{ fid }}" class="d-flex gap-1"><input type="hidden" name="que" value="area"><input type="hidden" name="id" value="{{ a.id }}">{{ dest_select(fid, a.local_id) }}<button class="btn btn-sm btn-outline-primary" title="Mover" {% if a.emps %}data-confirm="Se moverán también los {{ a.emps }} empleados de {{ a.name }}. ¿Seguir?"{% endif %}><i class="bi bi-arrow-right"></i></button></form></td></tr>
+    {% else %}<tr><td colspan="3" class="empty">Sin áreas.</td></tr>{% endfor %}
+    </tbody></table></div></div></div>
+  <div class="col-12"><div class="card"><div class="card-header d-flex flex-wrap gap-2 align-items-center">
+      <span>Empleados <span class="small text-secondary fw-normal">{{ emps|length }}</span></span>
+      <input id="fEmp" type="search" class="form-control form-control-sm ms-auto" style="max-width:220px" placeholder="Buscar nombre o N°">
+    </div>
+    <form method="post" action="/locales/mover" id="mvEmp"><input type="hidden" name="que" value="empleados"></form>
+    <div class="table-responsive table-wrap" style="max-height:420px"><table class="table table-sm align-middle mb-0 reparto" id="empTable">
+    <thead class="sticky-top"><tr><th style="width:2rem"><input type="checkbox" class="form-check-input" id="allEmp" title="Marcar los que se ven" aria-label="Marcar todos"></th><th>N°</th><th>Nombre</th><th>Área</th><th>Local</th></tr></thead><tbody>
+    {% for e in emps %}
+    <tr data-local="{{ e.local_id or 0 }}" data-q="{{ (e.employee_no ~ ' ' ~ e.name)|lower }}">
+      <td><input type="checkbox" class="form-check-input" form="mvEmp" name="ids" value="{{ e.id }}" aria-label="Marcar {{ e.name }}"></td>
+      <td class="mono small">{{ e.employee_no }}</td>
+      <td>{{ e.name }}{% if not e.active %} <span class="badge text-bg-secondary">inactivo</span>{% endif %}</td>
+      <td class="small">{{ e.area or '—' }}</td>
+      <td>{{ where(e.local_id) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">Sin empleados.</td></tr>{% endfor %}
+    </tbody></table></div>
+    <div class="card-body border-top d-flex gap-2 flex-wrap align-items-center py-2">
+      <span class="small text-secondary" id="selCount">0 marcados</span>
+      <div class="ms-auto d-flex gap-1">{{ dest_select('mvEmp', None) }}<button form="mvEmp" class="btn btn-sm btn-primary text-nowrap"><i class="bi bi-arrow-right"></i> Mover marcados</button></div>
+    </div>
+  </div></div>
+</div>
+{% endblock %}
+{% block scripts %}<script>
+document.addEventListener('click', ev => {
+  const b = ev.target.closest('[data-confirm]'); if (b && !confirm(b.dataset.confirm)) ev.preventDefault();
+});
+// Filtro por local (las tres tablas) y búsqueda de empleados, sin recargar
+const fLocal = document.getElementById('fLocal'), fEmp = document.getElementById('fEmp');
+function applyFilter(){
+  const lid = fLocal.value, q = fEmp.value.trim().toLowerCase();
+  document.querySelectorAll('table.reparto tbody tr[data-local]').forEach(tr => {
+    const okL = !lid || tr.dataset.local === lid, okQ = !q || !tr.dataset.q || tr.dataset.q.includes(q);
+    tr.classList.toggle('d-none', !(okL && okQ));
+  });
+}
+fLocal.addEventListener('change', applyFilter); fEmp.addEventListener('input', applyFilter);
+const boxes = () => [...document.querySelectorAll('#empTable tbody input[name=ids]')];
+const count = () => { document.getElementById('selCount').textContent = boxes().filter(b => b.checked).length + ' marcados'; };
+document.getElementById('allEmp').addEventListener('change', ev => {
+  boxes().forEach(b => { if (!b.closest('tr').classList.contains('d-none')) b.checked = ev.target.checked; }); count();
+});
+document.getElementById('empTable').addEventListener('change', count);
+document.getElementById('mvEmp').addEventListener('submit', ev => {
+  const n = boxes().filter(b => b.checked).length;
+  if (!n) { ev.preventDefault(); alert('Marca al menos un empleado.'); return; }
+  if (!confirm(`¿Mover ${n} empleado(s)? Si su área u horario son de otro local, se les quitan.`)) ev.preventDefault();
+});
+</script>{% endblock %}

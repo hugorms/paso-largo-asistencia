@@ -1,0 +1,399 @@
+{% extends "base.html" %}{% block title %}Resumen de locales{% endblock %}
+{% macro ring(value, color='success', size='') -%}
+<svg viewBox="0 0 48 48" class="rs-ring {{ size }}" aria-hidden="true"><circle cx="24" cy="24" r="20" class="rs-ring-bg"/>
+  <circle cx="24" cy="24" r="20" class="rs-ring-fg rs-{{ color }}" style="stroke-dashoffset:{{ 125.66 * (1 - (value or 0) / 100) }}"/></svg>
+{%- endmacro %}
+{% macro trend(v) -%}
+{% if v is none %}<span class="rs-delta">sin datos del mes anterior</span>
+{% else %}<span class="rs-delta {{ 'up' if v > 0 else 'down' if v < 0 else '' }}" title="vs. mes anterior">{{ '▲' if v > 0 else '▼' if v < 0 else '=' }} {{ v|abs }} pts</span>{% endif %}
+{%- endmacro %}
+{% macro pctv(v) %}{{ '—' if v is none else v ~ '%' }}{% endmacro %}
+{% macro detail(c) -%}
+{% if c.id %}<form method="post" action="/local" class="m-0"><input type="hidden" name="local" value="{{ c.id }}"><input type="hidden" name="next" value="/">
+  <button class="btn btn-sm btn-outline-primary" title="Elegir {{ c.name }} en el menú y abrir su panel">Ver detalle <i class="bi bi-arrow-right"></i></button></form>{% endif %}
+{%- endmacro %}
+{% block content %}
+<style>
+  .rs-tabs { display: inline-grid; grid-template-columns: repeat(3, 1fr); padding: 3px; border-radius: 999px; background: #fff;
+             border: 1px solid var(--pl-border); box-shadow: 0 1px 2px rgba(31, 36, 20, .04); }
+  .rs-tabs a { padding: .38rem 1.1rem; border-radius: 999px; color: var(--pl-muted); font-weight: 600; font-size: .85rem; text-align: center; }
+  .rs-tabs a:hover { text-decoration: none; color: var(--pl-olive-900); }
+  .rs-tabs a.active { background: var(--pl-olive); color: #fff; box-shadow: 0 1px 3px rgba(47, 56, 24, .3); }
+  .rs-ring { width: 84px; height: 84px; flex: none; transform: rotate(-90deg); }
+  .rs-ring.sm { width: 52px; height: 52px; }
+  .rs-ring-bg, .rs-ring-fg { fill: none; stroke-width: 5; }
+  .rs-ring-bg { stroke: #ecece4; }
+  .rs-ring-fg { stroke-linecap: round; stroke-dasharray: 125.66; transition: stroke-dashoffset .9s cubic-bezier(.65, 0, .35, 1); }
+  .rs-success { stroke: #3f8a4f; } .rs-warning { stroke: #d39b1b; } .rs-danger { stroke: #b8473a; } .rs-primary { stroke: var(--pl-olive); }
+  .rs-gauge { position: relative; display: grid; place-items: center; }
+  .rs-gauge > b { position: absolute; font-size: 1.05rem; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .rs-ring.sm + b { font-size: .85rem; }
+  .rs-card { height: 100%; display: flex; flex-direction: column; }
+  .rs-card .card-header .bi-shop { color: var(--pl-olive); }
+  .rs-big { font-size: 1.05rem; line-height: 1.3; }
+  .rs-big b { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+  .rs-chips { display: grid; grid-template-columns: repeat(5, 1fr); gap: .4rem; }
+  .rs-chip { border-radius: .6rem; padding: .45rem .3rem; text-align: center; min-width: 0; }
+  .rs-chip b { display: block; font-size: 1.2rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .rs-chip span { display: block; font-size: .66rem; font-weight: 500; line-height: 1.15; overflow-wrap: anywhere; }
+  .rs-foot { display: flex; flex-wrap: wrap; gap: .4rem 1.1rem; font-size: .82rem; color: var(--pl-muted);
+             border-top: 1px solid #efefe6; padding: .7rem 1.1rem; margin-top: auto; }
+  .rs-foot b { color: var(--pl-ink); }
+  .rs-delta { font-size: .72rem; font-weight: 600; color: var(--pl-muted); font-variant-numeric: tabular-nums; }
+  .rs-delta.up { color: #2c6a39; } .rs-delta.down { color: #94352a; }
+  .rs-kpi { display: flex; align-items: center; gap: .7rem; min-width: 0; }
+  .rs-kpi .rs-l { font-size: .74rem; color: var(--pl-muted); font-weight: 500; }
+  .rs-absent { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: .5rem; }
+  .rs-person { display: flex; gap: .6rem; align-items: center; padding: .45rem .55rem; border: 1px solid #efefe6; border-radius: .6rem; background: #fcfcf8; }
+  .rs-face { position: relative; flex: none; width: 46px; height: 46px; border-radius: 50%; overflow: hidden; border: 2px solid #f3d6d3; padding: 0;
+             background: var(--pl-olive-100, #eef0e2); color: var(--pl-olive-700, #4d5a26); font-weight: 600; cursor: zoom-in; }
+  .rs-face img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .rs-pname { font-weight: 600; font-size: .9rem; }
+  .rs-pmeta { font-size: .75rem; color: #7a7d6c; }
+  .rs-pdays { font-size: .75rem; margin-top: .1rem; }
+  .rs-list { list-style: none; margin: 0; padding: 0; font-size: .86rem; }
+  .rs-list li { display: flex; justify-content: space-between; gap: .6rem; padding: .3rem 0; border-bottom: 1px dashed #efefe6; }
+  .rs-list li:last-child { border-bottom: 0; }
+  .rs-list li > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rs-list .badge { flex: none; }
+  .rs-h { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--pl-muted); font-weight: 600; margin: .2rem 0 .35rem; }
+  .rs-more summary { font-size: .8rem; color: var(--pl-olive-600); cursor: pointer; list-style: none; padding-top: .25rem; }
+  .rs-chart { position: relative; height: 150px; }
+  .rs-chart-lg { position: relative; height: 240px; }
+  .rs-legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; font-size: .76rem; color: var(--pl-muted); }
+  .rs-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: .35rem; vertical-align: -1px; }
+  .rs-total .value.long { font-size: 1.45rem; }
+  .rs-total .value small { font-size: .9rem; color: var(--pl-muted); font-weight: 600; }
+  .rs-total .rs-delta { display: block; margin-top: .1rem; }
+  /* ---------- Semana ---------- */
+  .wk-hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.3fr) minmax(0, 1fr); gap: 1.6rem; align-items: stretch;
+             padding: 1.4rem 1.5rem; border-radius: 1.1rem; color: #f3f4ea;
+             background: radial-gradient(120% 140% at 0% 0%, #4a5726 0%, #2f3818 55%, #232a12 100%); box-shadow: 0 10px 30px rgba(35, 42, 18, .25); }
+  .wk-eyebrow { font-size: .7rem; text-transform: uppercase; letter-spacing: .12em; font-weight: 600; color: #c9d3a4; display: flex; align-items: center; gap: .45rem; }
+  .wk-dot { width: 7px; height: 7px; border-radius: 50%; background: #c7e07a; box-shadow: 0 0 0 4px rgba(199, 224, 122, .18); }
+  .wk-title { font-size: 1.55rem; font-weight: 700; letter-spacing: -.02em; margin: .35rem 0 .9rem; line-height: 1.15; }
+  .wk-kpis { display: flex; flex-wrap: wrap; gap: .6rem 1.3rem; }
+  .wk-kpis b { display: block; font-size: 1.25rem; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .wk-kpis span { font-size: .68rem; color: #b9c297; text-transform: uppercase; letter-spacing: .06em; }
+  .wk-red { color: #ff9b8c; } .wk-amber { color: #f5cd62; }
+  .wk-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: .5rem; align-items: end; min-height: 150px;
+              padding: 0 .4rem; border-left: 1px solid rgba(255, 255, 255, .08); border-right: 1px solid rgba(255, 255, 255, .08); }
+  .wk-strip { position: relative; padding-top: 1.6rem !important; }
+  .wk-strip-cap { position: absolute; top: 0; left: .6rem; font-size: .66rem; text-transform: uppercase; letter-spacing: .1em; color: #b9c297; font-weight: 600; }
+  .wk-day { position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+  .wk-bar { width: 100%; max-width: 34px; display: flex; flex-direction: column-reverse; border-radius: 7px; overflow: hidden;
+            background: rgba(255, 255, 255, .07); min-height: 6px; }
+  .wk-bar i { display: block; min-height: 0; }
+  .wk-bar .ok { background: #8fc46a; } .wk-bar .late { background: #f0bf45; } .wk-bar .abs { background: #f07a68; }
+  .wk-day.future .wk-bar { background: repeating-linear-gradient(45deg, rgba(255,255,255,.06) 0 4px, transparent 4px 8px); }
+  .wk-dlabel { margin-top: .45rem; font-size: .7rem; color: #b9c297; text-align: center; line-height: 1.1; }
+  .wk-dlabel b { display: block; font-size: .8rem; color: #f3f4ea; }
+  .wk-day.today .wk-dlabel b { color: #c7e07a; }
+  .wk-day.future .wk-dlabel { opacity: .45; }
+  .wk-badge { position: absolute; top: -4px; right: 50%; transform: translateX(22px); background: #f07a68; color: #2a0f0b;
+              font-size: .62rem; font-weight: 700; border-radius: 999px; padding: 0 .35rem; line-height: 1.35rem; min-width: 1.35rem; text-align: center; }
+  .wk-rank { display: flex; flex-direction: column; gap: .55rem; justify-content: center; min-width: 0; }
+  .wk-rank-row { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr) 70px 2.6rem; gap: .5rem; align-items: center; font-size: .86rem; }
+  .wk-pos { width: 1.4rem; height: 1.4rem; border-radius: 50%; display: grid; place-items: center; font-size: .7rem; font-weight: 700;
+            background: rgba(255, 255, 255, .1); }
+  .wk-rank-row:first-of-type .wk-pos { background: #c7e07a; color: #232a12; }
+  .wk-rank-bar { height: 6px; border-radius: 99px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+  .wk-rank-bar i { display: block; height: 100%; background: #c7e07a; border-radius: inherit; }
+  .wk-rank-row b { text-align: right; font-variant-numeric: tabular-nums; }
+  .wk-legend { display: flex; flex-wrap: wrap; gap: .35rem 1rem; font-size: .76rem; color: var(--pl-muted); }
+  .wk-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 4px; margin-right: .35rem; vertical-align: -2px; }
+  .wk-local { overflow: hidden; }
+  .wk-local-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .7rem 1rem;
+                   padding: .95rem 1.2rem; border-bottom: 1px solid #efefe6; background: linear-gradient(180deg, #fbfbf6, #fff); }
+  .wk-shop { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: none; font-size: 1.15rem;
+             background: var(--pl-olive-100); color: var(--pl-olive-700); }
+  .wk-local-name { font-weight: 700; font-size: 1.08rem; letter-spacing: -.01em; }
+  .wk-local-sub { font-size: .76rem; color: var(--pl-muted); }
+  .wk-pills { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+  .wk-pill { font-size: .76rem; color: var(--pl-muted); background: var(--pl-olive-50); border: 1px solid #ecede2; border-radius: 999px; padding: .2rem .65rem; }
+  .wk-pill b { color: var(--pl-ink); font-variant-numeric: tabular-nums; }
+  .wk-pill.red { background: #fbeceA; border-color: #f4d4cf; } .wk-pill.red b { color: #a33a2d; }
+  .wk-pill.amber { background: #fdf5e1; border-color: #f3e2b4; } .wk-pill.amber b { color: #8a6410; }
+  .wk-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
+  .wk-board-wrap { padding: .6rem .8rem 1rem 1.2rem; min-width: 0; }
+  .wk-board { display: grid; gap: 4px; }
+  .wk-row { display: grid; grid-template-columns: minmax(150px, 1.6fr) repeat(7, minmax(0, 1fr)); gap: 4px; align-items: center; }
+  .wk-head { position: sticky; top: 0; background: #fff; z-index: 1; padding-bottom: .15rem; }
+  .wk-head .wk-who { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--pl-muted); font-weight: 600; }
+  .wk-cell-h { text-align: center; font-size: .68rem; color: var(--pl-muted); line-height: 1.1; }
+  .wk-cell-h b { display: block; font-size: .8rem; color: var(--pl-ink); }
+  .wk-cell-h.today b { color: var(--pl-olive); }
+  .wk-who { display: flex; align-items: center; gap: .55rem; min-width: 0; padding-right: .4rem; }
+  .wk-name { font-weight: 600; font-size: .86rem; }
+  .wk-meta { font-size: .72rem; color: var(--pl-muted); }
+  .wk-cell { height: 38px; border-radius: 8px; display: grid; place-items: center; font-size: .72rem; font-weight: 600;
+             font-variant-numeric: tabular-nums; cursor: default; transition: transform .12s; }
+  .wk-cell:hover { transform: scale(1.06); }
+  .wk-cell .t { letter-spacing: -.02em; }
+  .c-ok { background: #e3f1dc; color: #2c6a39; } .wk-legend .c-ok { background: #8fc46a; }
+  .c-late { background: #fbedc6; color: #845d07; box-shadow: inset 0 -3px 0 #e2a82a; } .wk-legend .c-late { background: #f0bf45; }
+  .c-abs { background: #f6d3cd; color: #a33a2d; box-shadow: inset 0 0 0 1.5px #e39c90; } .wk-legend .c-abs { background: #f07a68; }
+  .c-perm { background: #dcecf3; color: #2b6a84; } .wk-legend .c-perm { background: #8cc1d6; }
+  .c-off, .c-hol { background: repeating-linear-gradient(45deg, #f4f4ee 0 5px, #fafaf6 5px 10px); } .wk-legend .c-off { background: #e6e6dc; }
+  .c-pend { background: transparent; border: 1.5px dashed #d9dbc9; }
+  .c-none { background: #fafaf6; } .wk-legend .c-pend { border: 1.5px dashed #c9cbb8; }
+  .wk-face { position: relative; flex: none; width: 46px; height: 46px; border-radius: 50%; overflow: hidden; padding: 0; border: 2px solid #fff;
+             box-shadow: 0 0 0 1.5px #e3e4d8; background: var(--pl-olive-100); color: var(--pl-olive-700); font-weight: 700; cursor: zoom-in; }
+  .wk-face.sm { width: 32px; height: 32px; font-size: .8rem; }
+  .wk-face img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .wk-side { border-left: 1px solid #efefe6; padding: .9rem 1.1rem 1.1rem; background: #fcfcf8; min-width: 0; }
+  .wk-absent { display: flex; align-items: center; gap: .65rem; padding: .55rem .6rem; margin-bottom: .45rem; border-radius: .7rem;
+               background: #fff; border: 1px solid #f1dcd8; border-left: 4px solid #d8644f; }
+  .wk-absent .wk-face { box-shadow: 0 0 0 2px #f1b8ae; }
+  .wk-days { display: flex; flex-wrap: wrap; gap: 3px; margin-top: .2rem; }
+  .wk-days span { font-size: .66rem; font-weight: 600; background: #f6d3cd; color: #a33a2d; border-radius: 5px; padding: 0 .3rem; }
+  .wk-count { margin-left: auto; text-align: center; font-size: 1.35rem; font-weight: 800; color: #b8473a; line-height: 1; }
+  .wk-count small { display: block; font-size: .6rem; font-weight: 600; color: var(--pl-muted); text-transform: uppercase; }
+  .wk-none { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: #2c6a39; background: #e9f4e4; border-radius: .7rem; padding: .7rem .8rem; }
+  @media (max-width: 1199.98px) {
+    .wk-hero { grid-template-columns: 1fr 1fr; }
+    .wk-rank { grid-column: 1 / -1; }
+    .wk-strip { border-right: 0; }
+    .wk-body { grid-template-columns: 1fr; }
+    .wk-side { border-left: 0; border-top: 1px solid #efefe6; }
+  }
+  @media (max-width: 767.98px) {
+    .wk-hero { grid-template-columns: 1fr; padding: 1.1rem; gap: 1.1rem; }
+    .wk-strip { border: 0; padding: 0; min-height: 120px; }
+    .wk-board-wrap { padding: .5rem .6rem .8rem; }
+    .wk-row { grid-template-columns: minmax(0, 1fr) repeat(7, 26px); gap: 3px; }
+    .wk-who .wk-face { display: none; }
+    .wk-cell { height: 26px; border-radius: 6px; }
+    .wk-cell .t { display: none; }
+    .wk-cell.c-late::after { content: '!'; color: #845d07; }
+  }
+  @media (max-width: 575.98px) {
+    .rs-tabs { width: 100%; }
+    .rs-tabs a { padding: .4rem .3rem; }
+    .rs-chips { grid-template-columns: repeat(3, 1fr); }
+    .rs-ring { width: 70px; height: 70px; }
+    .rs-gauge > b { font-size: .92rem; }
+    .rs-chart-lg { height: 200px; }
+  }
+</style>
+{% set cards, t = r.cards, r.total %}
+<div class="page-head">
+  <div><h1>Resumen de locales</h1>
+    <div class="sub">{% if r.vista == 'hoy' %}Hoy {{ r.start.strftime('%d/%m/%Y') }} · al {{ r.now.strftime('%H:%M') }}
+      {% elif r.vista == 'semana' %}Semana: del lunes {{ r.start.strftime('%d/%m') }} a hoy {{ r.end.strftime('%d/%m/%Y') }}
+      {% else %}Mes: del {{ r.start.strftime('%d/%m') }} a hoy {{ r.end.strftime('%d/%m/%Y') }} · comparado con el {{ r.prev_start.strftime('%d/%m') }} al {{ r.prev_end.strftime('%d/%m') }}{% endif %}</div></div>
+  <div class="page-actions">
+    <nav class="rs-tabs" aria-label="Periodo">
+      {% for k, label in [('hoy','Hoy'),('semana','Semana'),('mes','Mes')] %}<a href="/resumen?vista={{ k }}" class="{{ 'active' if r.vista == k }}" {{ 'aria-current=page' if r.vista == k }}>{{ label }}</a>{% endfor %}
+    </nav>
+    <a href="/resumen/exportar.xlsx?vista={{ r.vista }}" class="btn btn-outline-secondary"><i class="bi bi-file-earmark-excel"></i>Exportar a Excel</a>
+  </div>
+</div>
+
+{# ---------------- totales de la empresa ---------------- #}
+{% if r.vista == 'hoy' %}
+  {% set tiles = [('Se presentaron', t.presentes ~ '<small> de ' ~ t.esperados ~ '</small>', 'primary', 'people', ''),
+                  ('Puntuales', t.puntual, 'success', 'person-check', ''), ('Llegaron tarde', t.tarde, 'warning', 'alarm', ''),
+                  ('Ausentes', t.ausente, 'danger', 'person-x', ''), ('Con permiso', t.justificado, 'info', 'clipboard-check', ''),
+                  ('Aún no marcan', t.pendiente, 'secondary', 'hourglass-split', '')] %}
+{% elif r.vista == 'semana' %}
+  {% set tiles = [('Asistencia', pctv(t.asistencia), 'primary', 'graph-up', ''), ('Puntualidad', pctv(t.puntualidad), 'success', 'stopwatch', ''),
+                  ('Faltas', t.ausente, 'danger', 'person-x', ''), ('Tardanzas', t.tarde, 'warning', 'alarm', ''),
+                  ('Con permiso', t.justificado, 'info', 'clipboard-check', ''), ('Horas trabajadas', hm(t.worked_min), 'secondary', 'clock-history', '')] %}
+{% else %}
+  {% set tiles = [('Asistencia', pctv(t.asistencia), 'primary', 'graph-up', trend(t.d_asistencia)),
+                  ('Puntualidad', pctv(t.puntualidad), 'success', 'stopwatch', trend(t.d_puntualidad)),
+                  ('Faltas', t.ausente, 'danger', 'person-x', ''), ('Tardanzas', t.tarde, 'warning', 'alarm', ''),
+                  ('Con permiso', t.justificado, 'info', 'clipboard-check', ''), ('Horas trabajadas', hm(t.worked_min), 'secondary', 'clock-history', '')] %}
+{% endif %}
+{% if r.vista != 'semana' %}
+<div class="small text-secondary fw-semibold text-uppercase mb-2" style="letter-spacing:.06em">Toda la empresa · {{ cards|length }} local{{ 'es' if cards|length != 1 }}</div>
+<div class="row g-3 mb-4">
+  {% for label, value, color, icon, extra in tiles %}
+  <div class="col-6 col-md-4 col-xl-2 stat-col"><div class="card stat rs-total"><div class="d-flex justify-content-between align-items-start gap-2">
+    <div class="min-w-0"><div class="label">{{ label }}</div><div class="value mono{{ ' long' if (value|string)|length > 6 and not loop.first }}">{{ value|safe if loop.first and r.vista == 'hoy' else value }}</div>{{ extra }}</div>
+    <div class="ico ico-{{ color }}"><i class="bi bi-{{ icon }}"></i></div></div></div></div>
+  {% endfor %}
+</div>
+
+{% endif %}
+
+{% if not cards %}
+<div class="card"><div class="empty"><i class="bi bi-shop"></i>No hay locales activos. Créalos en <a href="/configuracion">Horarios y ajustes</a>.</div></div>
+{% endif %}
+
+{# ---------------- HOY ---------------- #}
+{% if r.vista == 'hoy' %}
+<div class="row g-3">
+  {% for c in cards %}
+  <div class="col-12 col-md-6 col-xxl-4"><div class="card rs-card">
+    <div class="card-header"><span><i class="bi bi-shop me-1"></i>{{ c.name }}</span>{{ detail(c) }}</div>
+    <div class="card-body">
+      <div class="d-flex align-items-center gap-3 mb-3">
+        <div class="rs-gauge">{{ ring(c.pct_presentes, 'success' if (c.pct_presentes or 0) >= 90 else 'warning' if (c.pct_presentes or 0) >= 70 else 'danger') }}<b>{{ pctv(c.pct_presentes) }}</b></div>
+        <div class="rs-big"><b>{{ c.presentes }}</b> de <b>{{ c.esperados }}</b><br><span class="text-secondary">se presentaron</span></div>
+      </div>
+      <div class="rs-chips">
+        {% for n, label, color in [(c.puntual,'Puntuales','success'),(c.tarde,'Tarde','warning'),(c.ausente,'Ausentes','danger'),
+                                   (c.justificado,'Con permiso','info'),(c.pendiente,'Sin marcar aún','secondary')] %}
+        <div class="rs-chip ico-{{ color }}" title="{{ label }}"><b>{{ n }}</b><span>{{ label }}</span></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="rs-foot">
+      <span title="Biométricos de este local"><span class="dot {{ 'dot-on' if c.devices.total and c.devices.online == c.devices.total else 'dot-off' if c.devices.total else '' }} me-1"></span>
+        Biométricos <b>{{ c.devices.online }}/{{ c.devices.total }}</b> en línea</span>
+      <span title="{{ c.away.out|join(', ') }}"><i class="bi bi-signpost-split me-1"></i><b>{{ c.away.out|length }}</b> marcaron en otro local</span>
+      {% if c.away['in'] %}<span title="{{ c.away['in']|join(', ') }}"><i class="bi bi-box-arrow-in-right me-1"></i><b>{{ c.away['in']|length }}</b> de otro local marcaron aquí</span>{% endif %}
+    </div>
+  </div></div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ---------------- SEMANA ---------------- #}
+{% if r.vista == 'semana' and cards %}
+{% macro face(id, name, photo, size='') -%}
+<button type="button" class="wk-face {{ size }}" data-photo="/empleados/{{ id }}/rostro" data-label="Foto registrada" data-caption="{{ name }}" aria-label="Ver foto de {{ name }}">
+  <span>{{ (name or '?')[:1]|upper }}</span>{% if photo %}<img src="/fotos/{{ photo }}" alt="" loading="lazy" onerror="this.remove()">{% else %}<img src="/empleados/{{ id }}/rostro" alt="" loading="lazy" onerror="this.remove()">{% endif %}</button>
+{%- endmacro %}
+<section class="wk-hero mb-4">
+  <div class="wk-hero-main">
+    <div class="wk-eyebrow"><span class="wk-dot"></span>Semana {{ r.week_no }} · {{ r.days[0].strftime('%d/%m') }} al {{ r.days[-1].strftime('%d/%m') }}</div>
+    <div class="wk-title">{% if t.ausente == 0 %}Semana sin faltas{% elif t.ausente == 1 %}1 falta en la empresa{% else %}{{ t.ausente }} faltas en la empresa{% endif %}</div>
+    <div class="wk-kpis">
+      <div><b>{{ pctv(t.asistencia) }}</b><span>asistencia</span></div>
+      <div><b>{{ pctv(t.puntualidad) }}</b><span>puntualidad</span></div>
+      <div><b class="wk-red">{{ t.ausente }}</b><span>faltas</span></div>
+      <div><b class="wk-amber">{{ t.tarde }}</b><span>tardanzas</span></div>
+      <div><b>{{ hm(t.worked_min) }}</b><span>horas</span></div>
+    </div>
+  </div>
+  <div class="wk-strip" aria-label="Cada día de la semana">
+    <div class="wk-strip-cap">Cada día · toda la empresa</div>
+    {% for d in r.strip %}
+    <div class="wk-day {{ 'future' if d.future }} {{ 'today' if d.today }}" title="{{ d.ok }} a tiempo · {{ d.late }} tarde · {{ d.abs }} faltas">
+      <div class="wk-bar" style="height:{{ [d.h, 6]|max if not d.future else 6 }}%">
+        {% if d.n %}<i class="ok" style="flex:{{ d.ok }}"></i><i class="late" style="flex:{{ d.late }}"></i><i class="abs" style="flex:{{ d.abs }}"></i>{% endif %}
+      </div>
+      <div class="wk-dlabel"><b>{{ d.dow }}</b>{{ d.day }}</div>
+      {% if d.abs %}<span class="wk-badge">{{ d.abs }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="wk-rank">
+    <div class="wk-eyebrow">Ranking de asistencia</div>
+    {% for x in r.ranking %}
+    <div class="wk-rank-row"><span class="wk-pos">{{ loop.index }}</span><span class="text-truncate">{{ x.name }}</span>
+      <span class="wk-rank-bar"><i style="width:{{ x.asistencia }}%"></i></span><b>{{ x.asistencia }}%</b></div>
+    {% else %}<div class="small opacity-75">Sin datos todavía</div>{% endfor %}
+  </div>
+</section>
+
+<div class="wk-legend mb-2">
+  <span><i class="c-ok"></i>A tiempo (hora de entrada)</span><span><i class="c-late"></i>Tarde</span><span><i class="c-abs"></i>Faltó</span>
+  <span><i class="c-perm"></i>Permiso</span><span><i class="c-off"></i>Libre / feriado</span><span><i class="c-pend"></i>Todavía no</span>
+</div>
+{% for c in cards %}
+<div class="card wk-local mb-4">
+  <div class="wk-local-head">
+    <div class="d-flex align-items-center gap-2 min-w-0"><span class="wk-shop"><i class="bi bi-shop"></i></span>
+      <div class="min-w-0"><div class="wk-local-name text-truncate">{{ c.name }}</div><div class="wk-local-sub">{{ c.board|length }} personas · {{ hm(c.worked_min) }} h trabajadas</div></div></div>
+    <div class="wk-pills">
+      <span class="wk-pill"><b>{{ pctv(c.asistencia) }}</b> asistencia</span>
+      <span class="wk-pill"><b>{{ pctv(c.puntualidad) }}</b> puntualidad</span>
+      <span class="wk-pill red"><b>{{ c.ausente }}</b> falta{{ 's' if c.ausente != 1 }}</span>
+      <span class="wk-pill amber"><b>{{ c.tarde }}</b> tarde</span>
+      {{ detail(c) }}
+    </div>
+  </div>
+  <div class="wk-body">
+    <div class="wk-board-wrap">
+      <div class="wk-board" role="table" aria-label="Asistencia de la semana en {{ c.name }}">
+        <div class="wk-row wk-head" role="row"><div class="wk-who" role="columnheader">Persona</div>
+          {% for d in r.days %}<div class="wk-cell-h {{ 'today' if d == r.end }}" role="columnheader"><b>{{ 'LMMJVSD'[d.weekday()] }}</b>{{ d.day }}</div>{% endfor %}</div>
+        {% for p in c.board %}
+        <div class="wk-row" role="row">
+          <div class="wk-who" role="cell">{{ face(p.id, p.name, p.photo, 'sm') }}<div class="min-w-0"><div class="wk-name text-truncate">{{ p.name }}</div>
+            <div class="wk-meta text-truncate">N° {{ p.no }}{% if p.area %} · {{ p.area }}{% endif %}</div></div></div>
+          {% for x in p.cells %}<div class="wk-cell c-{{ x.k }}" role="cell" title="{{ x.tip }}">{% if x.k in ('ok','late') %}<span class="t">{{ x.txt }}</span>{% elif x.k == 'abs' %}<i class="bi bi-x-lg"></i>{% elif x.k == 'perm' %}P{% endif %}</div>{% endfor %}
+        </div>
+        {% else %}<div class="empty py-4">Sin empleados con horario en este local.</div>{% endfor %}
+      </div>
+    </div>
+    <aside class="wk-side">
+      <div class="rs-h">Faltaron esta semana{% if c.faltas %} <span class="badge text-bg-danger ms-1">{{ c.faltas|length }}</span>{% endif %}</div>
+      {% for f in c.faltas %}
+      <div class="wk-absent">{{ face(f.id, f.name, None) }}
+        <div class="min-w-0"><div class="wk-name text-truncate">{{ f.name }}</div>
+          <div class="wk-meta text-truncate">N° {{ f.no }}{% if f.area %} · {{ f.area }}{% endif %}</div>
+          <div class="wk-days">{% for x in f.fechas.split(', ') %}<span>{{ x }}</span>{% endfor %}</div></div>
+        <div class="wk-count">{{ f.dias }}<small>día{{ 's' if f.dias != 1 }}</small></div>
+      </div>
+      {% else %}<div class="wk-none"><i class="bi bi-emoji-smile"></i>Nadie faltó esta semana</div>{% endfor %}
+      <div class="rs-h mt-3">Más tardanzas</div>
+      <ul class="rs-list">{% for x in c.tardanzas[:5] %}<li><span title="{{ x.min }} min en total">{{ x.name }}</span><span class="badge text-bg-warning">{{ x.veces }} {{ 'vez' if x.veces == 1 else 'veces' }} · {{ x.min }} min</span></li>
+        {% else %}<li class="text-secondary"><span><i class="bi bi-emoji-smile me-1"></i>Nadie llegó tarde</span></li>{% endfor %}</ul>
+    </aside>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{# ---------------- MES ---------------- #}
+{% if r.vista == 'mes' and cards %}
+<div class="card mb-3"><div class="card-header">Asistencia y puntualidad por local
+  <div class="rs-legend fw-normal"><span><i style="background:#6b7b3a"></i>Asistencia</span><span><i style="background:#3f8a4f"></i>Puntualidad</span><span><i style="background:#d5d9c3"></i>Mes anterior</span></div></div>
+  <div class="card-body"><div class="rs-chart-lg" style="height:{{ [160, 60 + 64 * cards|length]|max }}px"><canvas id="cmpMonth"></canvas></div></div></div>
+<div class="row g-3">
+  {% for c in cards %}
+  <div class="col-12 col-md-6 col-xxl-4"><div class="card rs-card">
+    <div class="card-header"><span><i class="bi bi-shop me-1"></i>{{ c.name }}</span>{{ detail(c) }}</div>
+    <div class="card-body">
+      <div class="row g-2 mb-3">
+        <div class="col-6"><div class="rs-kpi"><div class="rs-gauge">{{ ring(c.asistencia, 'primary', 'sm') }}<b>{{ pctv(c.asistencia) }}</b></div>
+          <div><div class="rs-l">asistencia</div>{{ trend(c.d_asistencia) }}</div></div></div>
+        <div class="col-6"><div class="rs-kpi"><div class="rs-gauge">{{ ring(c.puntualidad, 'success', 'sm') }}<b>{{ pctv(c.puntualidad) }}</b></div>
+          <div><div class="rs-l">puntualidad</div>{{ trend(c.d_puntualidad) }}</div></div></div>
+      </div>
+      <div class="row g-3">
+        <div class="col-6">
+          <div class="rs-h">Más faltas</div>
+          <ul class="rs-list">{% for f in c.faltas %}<li><span>{{ f.name }}</span><span class="badge text-bg-danger">{{ f.dias }}</span></li>
+            {% else %}<li class="text-secondary"><span><i class="bi bi-emoji-smile me-1"></i>Sin faltas</span></li>{% endfor %}</ul>
+        </div>
+        <div class="col-6">
+          <div class="rs-h">Más tardanzas</div>
+          <ul class="rs-list">{% for x in c.tardanzas %}<li><span title="{{ x.min }} min en total">{{ x.name }}</span><span class="badge text-bg-warning">{{ x.veces }}</span></li>
+            {% else %}<li class="text-secondary"><span><i class="bi bi-emoji-smile me-1"></i>Sin tardanzas</span></li>{% endfor %}</ul>
+        </div>
+      </div>
+    </div>
+    <div class="rs-foot"><span><i class="bi bi-clock-history me-1"></i><b>{{ hm(c.worked_min) }}</b> h trabajadas</span><span><b>{{ c.ausente }}</b> faltas</span>
+      <span><b>{{ c.tarde }}</b> tardanzas</span><span><b>{{ c.empleados }}</b> empleados</span></div>
+  </div></div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if r.vista == 'mes' and r.cards %}
+<script src="/static/chart.umd.js"></script>
+<script>
+Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+Chart.defaults.color = '#6c705f';
+const C = {puntual: '#3f8a4f', tarde: '#d39b1b', ausente: '#b8473a', olive: '#6b7b3a', prev: '#d5d9c3', grid: '#efefe6'};
+const tip = {backgroundColor: 'rgba(31,36,20,.95)', padding: 9, cornerRadius: 8, boxPadding: 4};
+const cards = {{ r.cards | map(attribute='name') | list | tojson }};
+const m = {{ r.cards | map(attribute='asistencia') | list | tojson }}, mp = {{ r.cards | map(attribute='prev') | map(attribute='asistencia') | list | tojson }};
+const p = {{ r.cards | map(attribute='puntualidad') | list | tojson }}, pp = {{ r.cards | map(attribute='prev') | map(attribute='puntualidad') | list | tojson }};
+const bar = (label, data, color) => ({label, data, backgroundColor: color, borderRadius: 4, borderSkipped: false, maxBarThickness: 16, categoryPercentage: .8, barPercentage: .9});
+new Chart(document.getElementById('cmpMonth'), {type: 'bar',
+  data: {labels: cards, datasets: [bar('Asistencia', m, C.olive), bar('Asistencia mes anterior', mp, C.prev),
+                                   bar('Puntualidad', p, C.puntual), bar('Puntualidad mes anterior', pp, '#e7eadb')]},
+  options: {indexAxis: 'y', maintainAspectRatio: false, plugins: {legend: {display: false},
+      tooltip: {...tip, callbacks: {label: c => `${c.dataset.label}: ${c.raw == null ? 'sin datos' : c.raw + '%'}`}}},
+    scales: {x: {min: 0, max: 100, ticks: {callback: v => v + '%', maxTicksLimit: 6}, grid: {color: C.grid}, border: {display: false}}, y: {grid: {display: false}}}}});
+</script>
+{% endif %}
+{% endblock %}
