@@ -157,6 +157,59 @@ def daily(rows, start: date, end: date) -> list[dict]:
     return out
 
 
+CELL = {"Puntual": "ok", "Trabajó en día libre": "ok", "Tarde": "late", "Ausente": "abs", "Justificado": "perm",
+        "Feriado": "hol", "Libre": "off", "Pendiente": "pend"}
+
+
+def week_days(start: date) -> list[date]:
+    """Los 7 días de la semana (lunes a domingo) aunque todavía no hayan llegado."""
+    return [start + timedelta(days=i) for i in range(7)]
+
+
+def board(rows, days: list[date], photos: dict) -> list[dict]:
+    """Tablero de la semana: una fila por persona y una celda por día (estado + hora de entrada)."""
+    people = {}
+    for r in rows:
+        p = people.setdefault(r["employee_id"], {"id": r["employee_id"], "name": r["name"], "no": r["employee_no"],
+                                                 "area": r["department"], "photo": photos.get(r["employee_id"]),
+                                                 "by_day": {}, "faltas": 0, "tardes": 0})
+        p["by_day"][r["date"]] = r
+        p["faltas"] += r["status"] == "Ausente"
+        p["tardes"] += r["status"] == "Tarde"
+    out = []
+    for p in people.values():
+        cells = []
+        for d in days:
+            r = p["by_day"].get(d)
+            if not r:
+                cells.append({"k": "none", "txt": "", "tip": f"{DOW[d.weekday()]} {d.day}"})
+                continue
+            entry = r["entry"].strftime("%H:%M") if r["entry"] else ""
+            tip = f"{DOW[d.weekday()]} {d.day}: {r['status']}" + (f", entró {entry}" if entry else "") + \
+                  (f" ({r['late_min']} min tarde)" if r["late_min"] else "") + (f" · {r['note']}" if r["note"] else "")
+            cells.append({"k": CELL.get(r["status"], "ok"), "txt": entry, "late": r["late_min"], "tip": tip})
+        out.append({**{k: p[k] for k in ("id", "name", "no", "area", "photo", "faltas", "tardes")}, "cells": cells})
+    out.sort(key=lambda x: (-x["faltas"], -x["tardes"], x["name"]))
+    return out
+
+
+def week_strip(rows, days: list[date], today: date) -> list[dict]:
+    """Cada día de la semana para toda la empresa: cuántos vinieron a tiempo, tarde o faltaron."""
+    by_day = defaultdict(Counter)
+    for r in rows:
+        by_day[r["date"]][r["status"]] += 1
+    out = []
+    for d in days:
+        c = by_day[d]
+        ok, late, absent = c["Puntual"] + c["Trabajó en día libre"], c["Tarde"], c["Ausente"]
+        out.append({"dow": "LMMJVSD"[d.weekday()], "day": d.day, "ok": ok, "late": late, "abs": absent,
+                    "n": ok + late + absent, "future": d > today, "today": d == today})
+    top = max([x["n"] for x in out] + [1])
+    for x in out:
+        x["h"] = round(100 * x["n"] / top)
+    return out
+
+
 # ------------------------------------------------------------------ armado de cada vista
 def build(vista: str = "hoy", now: datetime | None = None) -> dict:
     """Todo lo que muestra /resumen (y exporta a Excel) para la vista pedida."""
@@ -182,11 +235,18 @@ def build(vista: str = "hoy", now: datetime | None = None) -> dict:
                                     "total": sum(d["total"] for d in devs.values())}
         data["total"]["away"] = sum(len(a["out"]) for a in away.values())
     elif vista == "semana":
+        days = week_days(start)
+        photos = {r["id"]: r["photo"] for r in db.q("SELECT id, photo FROM employees WHERE photo IS NOT NULL")}
         for l, k in zip(locs, keys):
             g = groups.get(k, [])
             data["cards"].append({**l, **counts(g), "faltas": absences(g), "tardanzas": lateness(g),
-                                  "series": daily(g, start, end)})
+                                  "series": daily(g, start, end), "board": board(g, days, photos)})
         data["series"] = daily(shown, start, end)
+        data["days"] = days
+        data["strip"] = week_strip(shown, days, today)
+        data["week_no"] = start.isocalendar()[1]
+        ranked = sorted((c for c in data["cards"] if c["asistencia"] is not None), key=lambda c: -c["asistencia"])
+        data["ranking"] = [{"name": c["name"], "asistencia": c["asistencia"], "puntualidad": c["puntualidad"]} for c in ranked]
     else:
         p1, p2 = previous_month(start, end)
         prev = by_local(attendance.compute(p1, p2, now=now))
