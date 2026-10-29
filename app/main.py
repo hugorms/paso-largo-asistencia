@@ -233,12 +233,6 @@ def trend_data(days: int, locales=None):
     return {"days": days, "series": series, "total": total, "prev": prev}
 
 
-def sedes():
-    """Locales ya escritos en equipos y departamentos (para sugerirlos al escribir)."""
-    return [r["s"] for r in db.q("""SELECT DISTINCT trim(sede) s FROM (SELECT sede FROM devices UNION ALL
-                                    SELECT sede FROM departments) WHERE COALESCE(trim(sede),'')<>'' ORDER BY 1""")]
-
-
 def _mark_away(request, u, evs):
     """Prepara eventos para mostrar: marca los hechos en un equipo de otro local que el del empleado y
     esconde quién es cuando el empleado es de un local que este usuario no puede ver."""
@@ -1338,7 +1332,11 @@ async def locales_save(request: Request):
         elif db.q1("SELECT 1 FROM locales WHERE name=? COLLATE NOCASE AND id!=?", (name, loc["id"] if loc else 0)):
             flash(request, f"Ya existe un local llamado «{name}».", "danger")
         elif action == "crear":
-            db.ex("INSERT INTO locales(name) VALUES (?)", (name,))
+            lid = db.ex("INSERT INTO locales(name) VALUES (?)", (name,))
+            # Un horario de partida, para que los empleados que lleguen desde sus biométricos tengan uno
+            db.ex("""INSERT INTO schedules(name,start_time,end_time,tolerance_min,lunch_min,days,in_from,in_to,out_from,out_to,
+                     local_id) VALUES ('Oficina L-V','08:00','17:00',10,60,'1,2,3,4,5',?,?,?,?,?)""",
+                  db.default_windows("08:00", "17:00") + (lid,))
             db.audit(u["username"], "crear local", name)
             flash(request, f"Local «{name}» creado. Ahora puedes moverle biométricos, áreas y empleados abajo.")
         elif loc:
@@ -1362,6 +1360,22 @@ async def locales_save(request: Request):
     else:
         flash(request, "Acción no válida.", "danger")
     return back("/locales")
+
+
+async def _move_on_devices(request, eids, old_locals):
+    """Quien cambia de local sale de los biométricos de su local anterior y entra a los del nuevo."""
+    errors = 0
+    for eid in eids:
+        emp = db.q1("SELECT * FROM employees WHERE id=?", (eid,))
+        if not emp or not emp["active"]:
+            continue
+        old = old_locals.get(eid)
+        if old and old != emp["local_id"]:
+            errors += sum(not ok for _, ok, _m in await run_in_threadpool(devices.remove_employee, emp, [old]))
+        errors += sum(not ok for _, ok, _m in await run_in_threadpool(devices.push_employee, emp))
+    if errors:
+        flash(request, f"{errors} envío(s) a biométricos fallaron (¿equipo apagado?). Usa «Sincronizar» en Empleados "
+                       "cuando estén en línea.", "warning")
 
 
 @app.post("/locales/mover")
@@ -1394,6 +1408,7 @@ async def locales_move(request: Request):
                  (dest["id"], area["name"], area["id"])):
             flash(request, f"{dest['name']} ya tiene un área llamada «{area['name']}». Cambia el nombre de una de las dos antes de moverla.", "danger")
             return back("/locales#reparto")
+        moved = {r["id"]: r["local_id"] for r in db.q("SELECT id, local_id FROM employees WHERE department_id=?", (area["id"],))}
         with db.tx() as c:
             c.execute("UPDATE departments SET local_id=? WHERE id=?", (dest["id"], area["id"]))
             n = c.execute("UPDATE employees SET local_id=? WHERE department_id=?", (dest["id"], area["id"])).rowcount
@@ -1404,6 +1419,7 @@ async def locales_move(request: Request):
         db.audit(u["username"], "mover área de local",
                  f"{area['name']} ({n} empleados): {lname(area['local_id'])} → {dest['name']}" + (f"; {lost} sin horario" if lost else ""))
         flash(request, f"Área «{area['name']}» y sus {n} empleados ahora son de {dest['name']}.")
+        await _move_on_devices(request, list(moved), moved)
         if lost:
             flash(request, f"{lost} de esos empleados quedaron sin horario (el suyo era de otro local). "
                            f"Asígnales un horario de {dest['name']} en Empleados.", "warning")
@@ -1431,6 +1447,7 @@ async def locales_move(request: Request):
                                      AND schedule_id NOT IN (SELECT id FROM schedules WHERE local_id=?)""",
                                  ids_ + [dest["id"]]).rowcount
             pending = c.execute(f"SELECT COUNT(*) FROM employees WHERE id IN ({marks}) AND schedule_id IS NULL", ids_).fetchone()[0]
+        await _move_on_devices(request, ids_, {r["id"]: r["local_id"] for r in rows})
         names = ", ".join(r["name"] for r in rows[:20]) + (f" y {len(rows) - 20} más" if len(rows) > 20 else "")
         db.audit(u["username"], "mover empleados de local", f"{len(rows)} → {dest['name']}: {names}")
         flash(request, f"{len(rows)} empleado(s) movidos a {dest['name']}."

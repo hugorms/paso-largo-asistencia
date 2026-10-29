@@ -10,7 +10,9 @@ Sistema web de control de asistencia para terminales faciales Hikvision vía ISA
 - `app/attendance.py`: cálculo diario (entrada/salida, tardanza, faltas, horas, extras) y resumen.
 - `app/reports.py`: exportación Excel (openpyxl) y PDF (reportlab).
 - `app/db.py`: esquema SQLite y helpers `q`, `q1`, `ex`, `audit`. Datos en `datos/` (variable `ASISTENCIA_DATA`).
-- `app/main.py`: rutas web, sesiones y roles (admin, supervisor, consulta).
+- `app/main.py`: rutas web, sesiones y roles (admin, encargado, consulta).
+- `app/alcance.py`: locales (fincas/negocios). El admin ve todo; encargado y consulta solo sus locales. Todo filtro de datos pasa por aquí.
+- `app/resumen.py`: panel «Resumen de locales» del admin (hoy, semana, mes).
 - `app/seguridad.py`: protecciones para internet (bloqueo de intentos de ingreso, CSRF por Origin, cabeceras, cookie Secure por HTTPS).
 - `app/templates/`: Jinja2 + Bootstrap 5 local (`app/static/`, sin CDN).
 - `simulador.py`: terminal ISAPI falso en 127.0.0.1:8090 (admin/12345) para probar sin hardware; responde a SADP. `--ip 0.0.0.0 --puerto N` para probar cambios de IP.
@@ -18,4 +20,4 @@ Sistema web de control de asistencia para terminales faciales Hikvision vía ISA
 ## Convenciones
 - SQL directo con `db.q/q1/ex`, sin ORM. Las llamadas al equipo van en `run_in_threadpool`.
 - Textos de UI en español. Cada acción relevante se registra con `db.audit`.
-- Probar: `python simulador.py` y en otra terminal `python iniciar.py`; agregar el dispositivo 127.0.0.1:8090.
+- Probar: `python simulador.py` y en otra terminal `python iniciar.py`; agregar el dispositivo 127.0.0.1:8090. Varios equipos: `python simulador.py --puerto 8092 --serie SIM0002`.

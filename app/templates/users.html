@@ -31,7 +31,7 @@
 {% block scripts %}<script>
 // El admin ve todos los locales: sus casillas no hacen falta. Encargado y consulta necesitan al menos uno.
 document.querySelectorAll('.user-locales').forEach(box => {
-  const form = document.getElementById(box.dataset.roleOf), sel = document.querySelector(`select[form="${form.id}"][name="role"]`);
+  const form = document.getElementById(box.dataset.roleOf), sel = document.querySelector(`select[form="${box.dataset.roleOf}"][name="role"]`);  // form.id sería el campo oculto «id»
   const sync = () => box.classList.toggle('is-admin', sel.value === 'admin');
   sel.addEventListener('change', sync); sync();
   form.addEventListener('submit', ev => {

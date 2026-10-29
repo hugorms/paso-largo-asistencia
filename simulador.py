@@ -2,6 +2,7 @@
 
 Uso:  python simulador.py            -> escucha en http://127.0.0.1:8090  (usuario admin / clave 12345)
       python simulador.py --ip 0.0.0.0 --puerto 8091   -> otra IP/puerto (para probar el cambio de IP)
+      python simulador.py --puerto 8092 --serie SIM0002 -> otro equipo distinto (para probar varios locales)
 Genera marcaciones aleatorias de los usuarios registrados cada pocos segundos.
 También responde a la búsqueda SADP (UDP 37020) como un equipo Hikvision de verdad.
 """
@@ -21,6 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 USER, PASSWORD, REALM = "admin", "12345", "DS-K1T341AMF"
+SERIAL = "SIM0001"
 _z = datetime.now().astimezone().strftime("%z")
 TZ = f"{_z[:3]}:{_z[3:]}"
 app = FastAPI()
@@ -77,7 +79,7 @@ def add_event(minor, emp=None, when=None):
 def device_info():
     xml = (f'<?xml version="1.0" encoding="UTF-8"?><DeviceInfo version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">'
            "<deviceName>Simulador</deviceName><deviceID>1</deviceID><model>DS-K1T341AMF (simulado)</model>"
-           "<serialNumber>SIM0001</serialNumber><macAddress>00:11:22:33:44:55</macAddress>"
+           f"<serialNumber>{SERIAL}</serialNumber><macAddress>00:11:22:33:44:55</macAddress>"
            "<firmwareVersion>V3.2.30</firmwareVersion><deviceType>ACS</deviceType></DeviceInfo>")
     return Response(xml, media_type="application/xml")
 
@@ -237,7 +239,7 @@ def sadp_responder(ip, port):
             continue
         reply = ('<?xml version="1.0" encoding="UTF-8"?><ProbeMatch>'
                  f"<Uuid>{m.group(1).decode()}</Uuid><Types>inquiry</Types><DeviceType>ACS</DeviceType>"
-                 "<DeviceDescription>DS-K1T341AMF (simulado)</DeviceDescription><DeviceSN>SIM0001</DeviceSN>"
+                 f"<DeviceDescription>DS-K1T341AMF (simulado)</DeviceDescription><DeviceSN>{SERIAL}</DeviceSN>"
                  f"<CommandPort>8000</CommandPort><HttpPort>{port}</HttpPort><MAC>00-11-22-33-44-55</MAC>"
                  f"<IPv4Address>{ip}</IPv4Address><IPv4SubnetMask>255.255.255.0</IPv4SubnetMask>"
                  "<DHCP>true</DHCP><Activated>true</Activated></ProbeMatch>").encode()
@@ -277,7 +279,9 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--ip", default="127.0.0.1")
     p.add_argument("--puerto", type=int, default=8090)
+    p.add_argument("--serie", default="SIM0001", help="número de serie (distinto en cada simulador)")
     a = p.parse_args()
+    SERIAL = a.serie
     shown = a.ip
     if a.ip == "0.0.0.0":
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
