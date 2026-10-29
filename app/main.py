@@ -1103,7 +1103,7 @@ async def device_face(request: Request, did: int, no: str):
     """Foto del rostro guardado en ese equipo para ese N° (para comparar entre equipos)."""
     u = user(request, "admin", "encargado")
     dev = _device_visible(request, u, did)
-    if not dev:
+    if not dev or dev.get("paused_other"):
         return Response(status_code=404)
 
     def get():
@@ -1159,6 +1159,8 @@ async def device_save(request: Request):
         vals[-2] = 1
         flash(request, f"El equipo {host}:{port} ya estaba registrado como «{same['name']}»: se actualizaron "
                        "sus datos en lugar de crear otro.", "info")
+    if old and not alcance.is_admin(u) and db.q1("SELECT paused_other FROM devices WHERE id=?", (old["id"],))["paused_other"]:
+        vals[-2] = 0  # pausado por ser de otro local: sigue pausado hasta que el admin lo revise
     if old:
         db.ex("""UPDATE devices SET name=?, host=?, port=?, https=?, username=?, tz_offset=?, door_no=?, direction=?,
                  active=?, local_id=? WHERE id=?""", vals + [old["id"]])
@@ -1170,9 +1172,9 @@ async def device_save(request: Request):
                        local_id, password) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", vals + [f.get("password", "")])
     db.audit(u["username"], "guardar dispositivo", f"{f['name']} {f['host']} (local {lid})")
     dev = db.q1("SELECT * FROM devices WHERE id=?", (did,))
-    poller.wake.set()
-    try:
+    try:  # primero se revisa que no sea el aparato de otro local; recién entonces lo lee el lector
         info = await run_in_threadpool(devices.refresh_info, dev)
+        poller.wake.set()
         flash(request, f"Conectado a {info.get('deviceName') or dev['name']} — modelo {info.get('model')}, "
                        f"serie {info.get('serialNumber')}, firmware {info.get('firmwareVersion')}.")
     except ISAPIError as e:
@@ -1186,6 +1188,11 @@ async def device_action(request: Request, did: int, action: str):
     dev = _device_visible(request, u, did)
     if not dev:
         flash(request, "Ese equipo no existe o es de otro local.", "danger")
+        return back("/dispositivos")
+    if dev.get("paused_other") and action != "eliminar" and not (alcance.is_admin(u) and action in ("activar", "ip")):
+        # es el aparato de otro local: no se le habla (ni se bajan sus marcas) hasta que el admin lo revise
+        flash(request, "Ese equipo se pausó porque ya está registrado en otro local: solo el administrador "
+                       "puede reactivarlo o cambiarle la IP.", "danger")
         return back("/dispositivos")
     c = devices.client(dev)
     try:
@@ -1230,10 +1237,6 @@ async def device_action(request: Request, did: int, action: str):
             devices.CLOCK_WARNINGS.pop(did, None)
             flash(request, "Dispositivo desactivado: ya no se leen sus marcas (su historial se conserva).", "warning")
         elif action == "activar":
-            if devices.OTHER_LOCAL in (dev["last_error"] or "") and not alcance.is_admin(u):
-                flash(request, "Ese equipo se pausó porque ya está registrado en otro local: solo el administrador "
-                               "puede reactivarlo.", "danger")
-                return back("/dispositivos")
             db.ex("UPDATE devices SET active=1 WHERE id=?", (did,))
             try:  # se revisa enseguida que no sea el aparato de otro local (si lo es, vuelve a quedar pausado)
                 await run_in_threadpool(devices.refresh_info, db.q1("SELECT * FROM devices WHERE id=?", (did,)))

@@ -47,10 +47,10 @@ def refresh_info(dev):
             # Es el mismo aparato que otro local ya tiene registrado (con otra IP o nombre): no se une ni se lee
             # (si no, sus marcas se copiarían a este local). Queda pausado hasta que el admin lo revise.
             msg = f"Ese biométrico {OTHER_LOCAL}; se dejó pausado. Pídele al administrador que lo revise."
-            db.ex("UPDATE devices SET active=0, online=0, last_error=? WHERE id=?", (msg, dev["id"]))
+            db.ex("UPDATE devices SET active=0, online=0, paused_other=1, last_error=? WHERE id=?", (msg, dev["id"]))
             raise ISAPIError(msg)
         with db.tx() as c:
-            c.execute("""UPDATE devices SET online=1, last_seen=?, last_error=NULL, model=?, serial=?, firmware=?, mac=?
+            c.execute("""UPDATE devices SET online=1, last_seen=?, last_error=NULL, paused_other=0, model=?, serial=?, firmware=?, mac=?
                          WHERE id=?""", (_now(), info.get("model"), info.get("serialNumber"),
                                          info.get("firmwareVersion"), info.get("macAddress"), dev["id"]))
             # si este mismo equipo ya estaba registrado con otra IP, se une a ese registro
