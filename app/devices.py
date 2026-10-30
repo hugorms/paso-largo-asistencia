@@ -45,7 +45,7 @@ def refresh_info(dev):
                 # solo cuenta el registro del otro local que se está leyendo: uno desactivado o pausado no bloquea
                 # (si no, dos registros del mismo aparato se pausarían el uno al otro y nadie lo leería)
                 "SELECT 1 FROM devices WHERE serial=? AND id<>? AND local_id IS NOT NULL AND local_id<>? "
-                "AND active=1 AND COALESCE(paused_other, 0)=0",
+                "AND active=1 AND COALESCE(paused_other, 0)=0 AND local_id IN (SELECT id FROM locales WHERE active=1)",
                 (info["serialNumber"], dev["id"], mine["local_id"])):
             # Es el mismo aparato que otro local ya tiene registrado (con otra IP o nombre): no se une ni se lee
             # (si no, sus marcas se copiarían a este local). Queda pausado hasta que el admin lo revise.
@@ -181,15 +181,21 @@ def search_network():
                 f.update(serial=info.get("serialNumber") or "", mac=info.get("macAddress") or "",
                          model=info.get("model") or "")
                 break
-        dev = next((d for d in devs if (d["serial"] or d["mac"]) and discovery.same_device(
-            d["serial"], d["mac"], f["serial"], f["mac"])), None)
+        # el registro que ya usa esa IP, si no el que se está leyendo (no uno pausado o desactivado)
+        same = sorted((d for d in devs if (d["serial"] or d["mac"]) and discovery.same_device(
+            d["serial"], d["mac"], f["serial"], f["mac"])),
+            key=lambda d: (d["host"] != f["ip"], not d["active"], bool(d["paused_other"]), d["id"]))
+        dev = same[0] if same else None
         f["dev_id"], f["dev_name"], f["status"] = (dev or {}).get("id"), (dev or {}).get("name"), "nuevo"
         if not dev:
             continue
         if dev["host"] == f["ip"]:
             f["status"] = "registrado"
             continue
-        moved, note = relocate(dev, [f])
+        try:
+            moved, note = relocate(dev, [f])
+        except ISAPIError as e:
+            moved, note = None, str(e)
         f["status"], f["note"] = ("movido", f"IP actualizada: {dev['host']} → {f['ip']}") if moved else ("sin_acceso", note)
     return found, [str(n) for n in discovery.networks()]
 
@@ -212,6 +218,18 @@ def posix_tz(offset: str) -> str:
     return f"CST{sign}{int(h)}:{m}:00"
 
 
+def _same_event(row, emp, t):
+    """¿Es la misma marca ya guardada? Mismo empleado y la hora igual o corrida en horas justas
+    (corrección de zona horaria); si no, el equipo reinició su contador de eventos."""
+    if (row["employee_no"] or None) != emp:
+        return False
+    try:
+        diff = abs((datetime.fromisoformat(t) - datetime.fromisoformat(row["event_time"])).total_seconds())
+    except ValueError:
+        return True
+    return diff <= 14 * 3600 and diff % 1800 == 0
+
+
 def _save_event(c, dev, e):
     """Guarda un evento del equipo (de la búsqueda o del aviso en vivo). Devuelve (es_nuevo, hora_local)."""
     emp = str(e.get("employeeNoString") or e.get("employeeNo") or "").strip() or None
@@ -220,8 +238,13 @@ def _save_event(c, dev, e):
         return False, None
     minor = int(e.get("minor", 0))
     valid = 1 if emp and minor not in MINOR_FAIL else 0
-    exists = c.execute("SELECT 1 FROM events WHERE device_id=? AND serial_no=?",
+    exists = c.execute("SELECT id, event_time, employee_no FROM events WHERE device_id=? AND serial_no=?",
                        (dev["id"], e.get("serialNo"))).fetchone()
+    if exists and not _same_event(exists, emp, t):
+        # El equipo reinició su contador (se borró su registro o se reseteó): ese N° de evento ahora es otra marca.
+        # La vieja se conserva sin N° de evento y la nueva se guarda aparte (si no, pisaría la marca anterior).
+        c.execute("UPDATE events SET serial_no=NULL WHERE id=?", (exists["id"],))
+        exists = None
     # Si ya existía se actualiza la hora (corrige eventos guardados con zona horaria equivocada)
     # y se completan los datos que el aviso en vivo no trae (p. ej. la foto)
     c.execute("""INSERT INTO events(device_id, serial_no, event_time, employee_no, name,
@@ -585,7 +608,7 @@ class Poller(threading.Thread):
 
     def _ensure_listeners(self, devs):
         for dev in devs:
-            key = (dev["id"], dev["host"], dev["port"], dev["https"], dev["username"], dev["password"])
+            key = (dev["id"], dev["host"], dev["port"], dev["https"], dev["username"], dev["password"], dev["local_id"])
             cur = self.listeners.get(dev["id"])
             if cur and cur.key == key and cur.is_alive():
                 continue
