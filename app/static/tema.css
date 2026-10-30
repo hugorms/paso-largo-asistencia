@@ -162,7 +162,7 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
 .avatar { width: 38px; height: 38px; object-fit: cover; border-radius: 50%; }
 .avatar-ph { width: 38px; height: 38px; border-radius: 50%; background: var(--pl-olive-100); color: var(--pl-olive-700);
              display: inline-grid; place-items: center; font-weight: 600; font-size: .85rem; }
-.dot { width: .55rem; height: .55rem; border-radius: 50%; display: inline-block; }
+.dot { width: .55rem; height: .55rem; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .dot-on { background: #3f8a4f; box-shadow: 0 0 0 3px #e2f0e4; }
 .dot-off { background: #b8473a; box-shadow: 0 0 0 3px #f6e0dd; }
 .photo-box { aspect-ratio: 4 / 5; max-height: 300px; width: 100%; border-radius: .7rem; background: var(--pl-olive-50);
@@ -333,3 +333,9 @@ h1, h2, h3, h4, h5, h6 { color: var(--pl-ink); letter-spacing: -.01em; }
 
 /* En el teléfono las tablas largas no van en cajas con scroll interno (se cortaban sin aviso) */
 @media (max-width: 767.98px) { .table-responsive[style*="max-height"] { max-height: none !important; } }
+
+/* Equipo desactivado: atenuado sin crear capa (si no, el menú «…» quedaba debajo de la tarjeta siguiente) */
+.dev-off { background: #f3f2ec; }
+.dev-off .card-body dl { color: var(--bs-secondary-color); }
+/* Botones con texto largo arriba de la página: que bajen de línea en el teléfono */
+@media (max-width: 767.98px) { .page-actions > .btn { white-space: normal; } }

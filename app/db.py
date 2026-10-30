@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS ix_events_emp_time ON events(employee_no, event_time);
 CREATE INDEX IF NOT EXISTS ix_events_time ON events(event_time);
 CREATE TABLE IF NOT EXISTS holidays (id INTEGER PRIMARY KEY, date TEXT UNIQUE NOT NULL, name TEXT);
+-- Días en que un empleado estuvo de baja y luego volvió: no cuentan como faltas
+CREATE TABLE IF NOT EXISTS employee_gaps (
+    id INTEGER PRIMARY KEY, employee_id INTEGER NOT NULL, date_from TEXT NOT NULL, date_to TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS leaves (
     id INTEGER PRIMARY KEY, employee_id INTEGER NOT NULL, date_from TEXT NOT NULL, date_to TEXT NOT NULL,
     kind TEXT NOT NULL, notes TEXT, created_by TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP

@@ -392,7 +392,8 @@ async def employee_save(request: Request):
 
     def fail(msg):
         # vuelve a mostrar el formulario con lo que escribió (la foto hay que volver a elegirla)
-        flash(request, msg, "danger")
+        photo_in = any(getattr(f.get(k), "filename", "") for k in ("photo", "photo_cam")) or f.get("photo_data")
+        flash(request, msg + (" Vuelve a elegir la foto." if photo_in else ""), "danger")
         e = {k: f.get(k) for k in ("employee_no", "name", "document", "position", "email", "phone", "gender",
                                    "hire_date")}
         e.update(id=eid, active=1 if f.get("active") else 0, photo=old and old["photo"], face_at=old and old["face_at"],
@@ -450,6 +451,14 @@ async def employee_save(request: Request):
             db.ex("UPDATE events SET employee_no=? WHERE employee_no=?", (no, old["employee_no"]))
         if old["local_id"] is not None and old["local_id"] != lid:
             moved_from = old["local_id"]
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        if not old["active"] and f.get("active") and old["deactivated_at"] and old["deactivated_at"] <= yesterday:
+            # vuelve tras una baja: los días que estuvo fuera no son faltas
+            db.ex("INSERT INTO employee_gaps(employee_id, date_from, date_to) VALUES (?,?,?)",
+                  (eid, old["deactivated_at"], yesterday))
+        if not photo_name and (renamed or moved_from or (old["active"] and not f.get("active"))):
+            # se va a borrar de equipos: si su rostro solo está en el equipo, se guarda antes para no perderlo
+            old = await run_in_threadpool(_keep_face, old)
         db.ex("""UPDATE employees SET employee_no=?, name=?, document=?, department_id=?, position=?, email=?,
                  phone=?, gender=?, schedule_id=?, hire_date=?, active=?, local_id=? WHERE id=?""", vals + [eid])
         if photo_name:
@@ -497,7 +506,7 @@ def _flash_results(request, msg, res):
         if others:
             flash(request, f"También se actualizó en {len(others)} equipo(s) de otros locales.", "info")
     if not res:
-        flash(request, msg + " (Su local no tiene equipos activos.)", "warning")
+        flash(request, (msg + " " if msg else "") + "Su local no tiene equipos activos: no se envió a ningún biométrico.", "warning")
     for name, ok, m in res:
         flash(request, f"{msg} {name}: {m}", "success" if ok else "danger")
         msg = ""
@@ -507,6 +516,10 @@ def _flash_results(request, msg, res):
 async def employee_sync(request: Request, eid: int):
     u = user(request, "admin", "encargado")
     emp = _emp_visible(request, u, eid)
+    if not emp["active"]:
+        flash(request, "Está dado de baja: actívalo primero (casilla «Activo» y Guardar) para enviarlo a los equipos.",
+              "warning")
+        return back(f"/empleados/{eid}")
     _flash_results(request, "", await run_in_threadpool(devices.push_employee, emp))
     return back(f"/empleados/{eid}")
 
@@ -515,6 +528,7 @@ async def employee_sync(request: Request, eid: int):
 async def employee_delete(request: Request, eid: int):
     u = user(request, "admin", "encargado")
     emp = _emp_visible(request, u, eid)
+    emp = await run_in_threadpool(_keep_face, emp)  # para poder volver a enviarlo si regresa
     # Se borra de los equipos de todos los locales: ese N° es solo de esta persona (ver devices.remove_employee)
     res = await run_in_threadpool(devices.remove_employee, emp)
     # Se conserva el historial de marcas; el empleado queda inactivo
@@ -546,6 +560,10 @@ async def employees_import_device(request: Request):
     dev = alcance.row(request, u, "devices", f.get("device_id")) if (f.get("device_id") or "").isdigit() else None
     if not dev or dev["local_id"] is None:
         flash(request, "Elige un equipo de tu local.", "danger")
+        return back("/empleados")
+    if dev["paused_other"] or not dev["active"]:
+        flash(request, f"«{dev['name']}» está {'pausado' if dev['paused_other'] else 'desactivado'}: actívalo primero en "
+                       "Dispositivos.", "danger")
         return back("/empleados")
     try:
         users = await run_in_threadpool(devices.client(dev).search_users)
@@ -592,13 +610,17 @@ async def employees_import_excel(request: Request):
         flash(request, "El Excel debe tener columnas 'numero' y 'nombre'.", "danger")
         return back("/empleados")
     sched = devices.local_schedule(lid)
-    n, other = 0, []
+    n, other, bad = 0, [], []
     for r in rows[1:]:
         g = lambda c: (str(r[c]).strip() if c is not None and r[c] is not None else None)
         no, name = g(c_no), g(c_name)
         if not no or not name:
             continue
         no = no.removesuffix(".0")
+        if not re.fullmatch(r"[A-Za-z0-9]{1,32}", no):
+            bad.append(no)  # el equipo solo acepta letras y números
+            continue
+        name = name[:32]  # límite del equipo
         cur = db.q1("SELECT id, local_id FROM employees WHERE employee_no=?", (no,))
         if cur and not alcance.can_see(request, u, cur["local_id"]):
             other.append(no)  # ese N° es de otro local: no se toca ni se dice de quién es
@@ -623,6 +645,9 @@ async def employees_import_excel(request: Request):
     if other:
         flash(request, f"{len(other)} N° no se importaron porque ya los usa otro local: {', '.join(other[:20])}. "
                        f"El siguiente N° libre es {next_employee_no()}.", "warning")
+    if bad:
+        flash(request, f"{len(bad)} fila(s) no se importaron porque el N° debe tener solo letras y números: "
+                       f"{', '.join(bad[:20])}.", "warning")
     return back("/empleados")
 
 
@@ -637,6 +662,19 @@ def photo(request: Request, name: str):
             return Response(status_code=404)
     p = db.PHOTOS_DIR / name
     return FileResponse(p) if p.exists() else Response(status_code=404)
+
+
+def _keep_face(emp):
+    """Si el rostro del empleado solo está en el equipo, lo guarda como su foto (antes de borrarlo de equipos)."""
+    if emp["photo"] and (db.PHOTOS_DIR / emp["photo"]).exists():
+        return emp
+    data, enrolled = _face_from_devices(emp)
+    if not (data and enrolled):
+        return emp
+    name = f"{emp['employee_no']}_{uuid.uuid4().hex[:8]}.jpg"
+    (db.PHOTOS_DIR / name).write_bytes(data)
+    db.ex("UPDATE employees SET photo=?, face_at=COALESCE(face_at, ?) WHERE id=?", (name, date.today().isoformat(), emp["id"]))
+    return {**dict(emp), "photo": name}
 
 
 def _face_from_devices(emp):
@@ -733,7 +771,7 @@ async def config_save(request: Request, what: str):
                   "danger")
             return back("/configuracion")
         if not all((f.get(k) or "0").isdigit() for k in ("tolerance_min", "lunch_min")):
-            flash(request, "La tolerancia y el almuerzo deben ser minutos (números enteros).", "danger")
+            flash(request, "La tolerancia y el refrigerio deben ser minutos (números enteros).", "danger")
             return back("/configuracion")
         days = ",".join(sorted(v for k, v in (await request.form()).multi_items() if k == "days" and v in "1234567"))
         if not days:
@@ -839,6 +877,9 @@ async def leave_save(request: Request):
             flash(request, "Ese permiso no existe.", "danger")
             return back("/permisos")
         db.ex("DELETE FROM leaves WHERE id=?", (f["delete"],))
+        db.audit(u["username"], "permisos", f"borró permiso {lv['kind']} {lv['date_from']}")
+        flash(request, "Permiso eliminado.")
+        return back("/permisos")
     elif f.get("employee_id") and not alcance.row(request, u, "employees", f["employee_id"]):
         flash(request, "Ese empleado no existe.", "danger")
         return back("/permisos")
@@ -1018,6 +1059,12 @@ def _devices_page(request, u, **ctx):
         if d["active"] and d["local_id"] is not None:
             per_local[(d["local_id"], d["local"])].append(d)
     compare_locals = [{"id": k[0], "name": k[1]} for k, v in per_local.items() if len(v) > 1]
+    if alcance.is_admin(u):
+        for d in devs:
+            if d.get("paused_other") and d["serial"]:
+                d["clash"] = db.q1("""SELECT d.name, l.name AS local FROM devices d LEFT JOIN locales l ON l.id=d.local_id
+                                       WHERE d.serial=? AND d.id<>? AND d.active=1 AND l.active=1 ORDER BY d.id LIMIT 1""",
+                                   (d["serial"], d["id"]))
     return render(request, "devices.html", u, devs=devs, can_edit=can_edit, compare_locals=compare_locals,
                   local_opts=alcance.choices(u) if can_edit else [],
                   default_local=alcance.default_local(request, u), **ctx)
@@ -1186,7 +1233,8 @@ async def device_save(request: Request):
         flash(request, f"Conectado a {info.get('deviceName') or dev['name']} — modelo {info.get('model')}, "
                        f"serie {info.get('serialNumber')}, firmware {info.get('firmwareVersion')}.")
     except ISAPIError as e:
-        flash(request, f"Dispositivo guardado, pero no responde: {e}", "warning")
+        flash(request, f"Dispositivo guardado, pero {'quedó pausado' if devices.OTHER_LOCAL in str(e) else 'no responde'}: {e}",
+              "warning")
     return back("/dispositivos")
 
 
@@ -1217,7 +1265,7 @@ async def device_action(request: Request, did: int, action: str):
             n = await run_in_threadpool(c.user_count)
             t = await run_in_threadpool(c.get_time)
             flash(request, f"En línea: {info.get('model')} (serie {info.get('serialNumber')}), {n} usuarios, "
-                           f"hora del equipo {t.get('localTime', '?')}.")
+                           f"hora del equipo {(t.get('localTime') or '?')[:19].replace('T', ' ')}.")
         elif action == "ip":
             f = await form(request)
             host, _, port = (f.get("host") or "").strip().partition(":")
@@ -1241,7 +1289,7 @@ async def device_action(request: Request, did: int, action: str):
             await run_in_threadpool(c.reboot)
             flash(request, f"{dev['name']} se está reiniciando.", "warning")
         elif action == "eliminar":
-            db.ex("UPDATE devices SET active=0 WHERE id=?", (did,))
+            db.ex("UPDATE devices SET active=0, online=0 WHERE id=?", (did,))
             devices.CLOCK_WARNINGS.pop(did, None)
             flash(request, "Dispositivo desactivado: ya no se leen sus marcas (su historial se conserva).", "warning")
         elif action == "activar":
@@ -1317,12 +1365,12 @@ async def user_save(request: Request):
         if int(f["id"]) == u["id"] and (f.get("role") != "admin" or not f.get("active")):
             flash(request, "No puedes quitarte el rol de administrador ni desactivarte.", "danger")
             return back("/usuarios")
+        if f.get("password") and len(f["password"]) < MIN_PASSWORD:
+            flash(request, f"La contraseña debe tener {MIN_PASSWORD}+ caracteres. No se guardó ningún cambio.", "danger")
+            return back("/usuarios")
         db.ex("UPDATE users SET full_name=?, role=?, active=? WHERE id=?",
               (f.get("full_name"), f["role"], 1 if f.get("active") else 0, f["id"]))
         if f.get("password"):
-            if len(f["password"]) < MIN_PASSWORD:
-                flash(request, f"La contraseña debe tener {MIN_PASSWORD}+ caracteres.", "danger")
-                return back("/usuarios")
             new_hash = db.hash_password(f["password"])
             db.ex("UPDATE users SET password_hash=? WHERE id=?", (new_hash, f["id"]))
             if int(f["id"]) == u["id"]:
@@ -1429,6 +1477,7 @@ async def _move_on_devices(request, eids, old_locals):
             continue
         old = old_locals.get(eid)
         if old and old != emp["local_id"]:
+            emp = await run_in_threadpool(_keep_face, emp)
             errors += sum(not ok for _, ok, _m in await run_in_threadpool(devices.remove_employee, emp, [old]))
         errors += sum(not ok for _, ok, _m in await run_in_threadpool(devices.push_employee, emp))
     if errors:

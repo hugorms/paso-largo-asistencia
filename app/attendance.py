@@ -171,11 +171,15 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
     leaves = defaultdict(list)
     for lv in db.q("SELECT * FROM leaves WHERE date_to >= ? AND date_from <= ?", (start.isoformat(), end.isoformat())):
         leaves[lv["employee_id"]].append(lv)
+    gaps = defaultdict(list)  # estuvo de baja esos días y luego volvió
+    for g in db.q("SELECT * FROM employee_gaps WHERE date_to >= ? AND date_from <= ?", (start.isoformat(), end.isoformat())):
+        gaps[g["employee_id"]].append((g["date_from"], g["date_to"]))
     min_gap = timedelta(minutes=db.int_setting("min_gap_minutes", 2))
     # La asistencia cuenta desde que tiene rostro registrado (o desde su primera marca), y no antes de
     # su fecha de ingreso: quien aún no tiene rostro no acumula faltas.
     first_mark = {r["employee_no"]: r["d"][:10] for r in db.q(
-        f"SELECT employee_no, MIN(event_time) AS d FROM events WHERE valid=1 AND employee_no IN ({ph}) GROUP BY employee_no",
+        f"SELECT employee_no, MIN(event_time) AS d FROM events WHERE valid=1 AND COALESCE(source, 'equipo')='equipo' "
+        f"AND employee_no IN ({ph}) GROUP BY employee_no",
         nos)}
 
     rows = []
@@ -190,6 +194,8 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
                 continue
             if not e["active"] and e["deactivated_at"] and d.isoformat() >= e["deactivated_at"]:
                 break  # desde el día de la baja ya no cuenta
+            if any(a <= d.isoformat() <= b for a, b in gaps[e["id"]]):
+                continue
             ms = marks.get((e["employee_no"], d), [])
             entry, exit_, outside = pick_marks(ms, e, d, now, min_gap)
             row = {"employee_id": e["id"], "employee_no": e["employee_no"], "name": e["name"],

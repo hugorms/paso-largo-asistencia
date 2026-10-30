@@ -3,7 +3,7 @@
   <div class="col-md-4"><label class="form-label">Nombre</label><input name="name" value="{{ dv.name or '' }}" class="form-control" required placeholder="Entrada principal"></div>
   <div class="col-md-4"><label class="form-label">IP del equipo</label><input name="host" value="{{ dv.host or '' }}" class="form-control mono" required placeholder="192.168.1.19"></div>
   <div class="col-6 col-md-2"><label class="form-label">Puerto</label><input name="port" type="number" value="{{ dv.port or 80 }}" class="form-control mono"></div>
-  <div class="col-6 col-md-2 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="https" value="1" {{ 'checked' if dv.https }}><label class="form-check-label">HTTPS</label></div></div>
+  <div class="col-6 col-md-2 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="https" value="1" id="https{{ dv.id or 'n' }}" {{ 'checked' if dv.https }}><label class="form-check-label" for="https{{ dv.id or 'n' }}">HTTPS</label></div></div>
   {% set dloc = dv.local_id if dv.id else default_local %}
   <div class="col-md-4"><label class="form-label">Local</label><select name="local_id" class="form-select" required>
     {% if dloc is none or local_opts|selectattr('id','equalto',dloc)|list|length == 0 %}<option value="">Elige el local…</option>{% endif %}
@@ -15,6 +15,6 @@
   <div class="col-md-6"><label class="form-label">Tipo de marcación</label><select name="direction" class="form-select">
     {% for v,l in [('ambos','Entrada y salida (1.ª marca = entrada, última = salida)'),('entrada','Solo entrada'),('salida','Solo salida')] %}<option value="{{ v }}" {{ 'selected' if dv.direction == v }}>{{ l }}</option>{% endfor %}</select></div>
   <input name="door_no" type="hidden" value="{{ dv.door_no or 1 }}">
-  <div class="col-6 col-md-4 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="active" value="1" {{ 'checked' if dv.active or not dv.id }}><label class="form-check-label">Activo</label></div></div>
+  <div class="col-6 col-md-4 d-flex align-items-end"><div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="active" value="1" id="act{{ dv.id or 'n' }}" {{ 'checked' if dv.active or not dv.id }}><label class="form-check-label" for="act{{ dv.id or 'n' }}">Activo</label></div></div>
   <div class="col-12 form-actions mt-0"><button class="btn btn-primary"><i class="bi bi-plug"></i> Guardar y probar conexión</button></div>
 </form>

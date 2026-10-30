@@ -47,17 +47,18 @@
         {% if r.others %}<div class="small text-secondary">mismo nombre que N° {{ r.others|join(', ') }}</div>{% endif %}
         {% if r.status == 'falta' %}<form method="post" action="/dispositivos/copiar" class="d-inline"><input type="hidden" name="local" value="{{ compare_local }}"><input type="hidden" name="no" value="{{ r.no }}"><button class="btn btn-sm btn-link p-0 ms-1">Copiar</button></form>{% endif %}</td>
     </tr>{% endfor %}</tbody></table></div>
-  {% else %}<div class="card-body small">Los equipos no tienen usuarios registrados.</div>{% endif %}
+  {% else %}<div class="card-body small">{{ 'Los equipos no tienen usuarios registrados.' if cdevs else 'Este local no tiene biométricos activos para comparar.' }}</div>{% endif %}
 </div>{% endif %}
 {% if can_edit %}<div class="collapse {{ 'show' if not devs }}" id="new"><div class="card mb-3"><div class="card-header">{{ 'Otro equipo (distinto a los de abajo)' if devs else 'Registrar el equipo' }}</div><div class="card-body">
   {% if devs %}<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> Los equipos ya registrados aparecen abajo con sus datos: úsalos desde ahí. Si pones la IP de uno de ellos, se actualiza ese mismo en vez de crear otro.</div>{% endif %}
   {% set dv = {} %}{% include "_device_form.html" %}</div></div></div>{% endif %}
 <div class="row g-3">
 {% for dv in devs %}
-<div class="col-xl-6"><div class="card h-100 {{ 'opacity-50' if not dv.active }}">
+{% set paused = dv.paused_other %}<div class="col-xl-6"><div class="card h-100 {{ 'dev-off' if not dv.active }}">
   <div class="card-header">
-    <span class="d-flex align-items-center gap-2"><span class="dot {{ 'dot-on' if dv.online else 'dot-off' }}"></span>{{ dv.name }}</span>
-    <span class="d-flex gap-1"><span class="badge text-bg-{{ 'success' if dv.online else 'danger' }}">{{ 'En línea' if dv.online else 'Sin conexión' }}</span>
+    <span class="d-flex align-items-center gap-2 min-w-0"><span class="dot {{ 'dot-on' if dv.online and dv.active else 'dot-off' }}"></span>{{ dv.name }}</span>
+    <span class="d-flex gap-1">{% if paused %}<span class="badge text-bg-warning">Pausado</span>{% elif not dv.active %}<span class="badge text-bg-secondary">Desactivado</span>
+      {% else %}<span class="badge text-bg-{{ 'success' if dv.online else 'danger' }}">{{ 'En línea' if dv.online else 'Sin conexión' }}</span>{% endif %}
       <span class="badge text-bg-light">{{ {'ambos':'Entrada y salida','entrada':'Solo entrada','salida':'Solo salida'}[dv.direction] }}</span></span>
   </div>
   <div class="card-body">
@@ -71,14 +72,22 @@
     <dt class="col-5 text-secondary fw-normal">Último evento</dt><dd class="col-7 mb-0 mono">{{ (dv.last_event_time or '—').replace('T',' ') }}</dd>
     <dt class="col-5 text-secondary fw-normal">Eventos guardados</dt><dd class="col-7 mb-0 mono">{{ dv.n_events }}</dd>
   </dl>
-  {% if can_edit %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="input-group input-group-sm mb-3" title="Si el equipo cambió de IP, escribe la nueva y pulsa «Probar y conectar»">
+  {% if paused %}<div class="alert alert-warning py-2 small mb-3"><i class="bi bi-pause-circle"></i> <b>Pausado:</b> este aparato ya está registrado en otro local, así que aquí no se lee para no mezclar marcas.
+    {% if u.role == 'admin' %}{% if dv.clash %}Es el mismo que «{{ dv.clash.name }}» ({{ dv.clash.local or 'sin local' }}).{% endif %}
+      Deja solo uno: desactiva el que sobra y pulsa <b>Volver a activar</b> aquí, o mueve los dos al mismo local en <a href="/locales#reparto">Locales</a>.
+    {% else %}Solo el administrador puede revisarlo.{% endif %}</div>{% endif %}
+  {% if can_edit and dv.active and not paused %}<form method="post" action="/dispositivos/{{ dv.id }}/ip" class="input-group input-group-sm mb-3" title="Si el equipo cambió de IP, escribe la nueva y pulsa «Probar y conectar»">
     <span class="input-group-text">IP</span><input name="host" value="{{ dv.host }}" class="form-control mono" required aria-label="IP del equipo"><span class="input-group-text mono">:{{ dv.port }}</span>
     <button class="btn btn-outline-primary"><i class="bi bi-plug"></i> Probar y conectar</button></form>{% endif %}
   {% if clock_warnings.get(dv.id) %}<div class="alert alert-warning py-2 small mb-3"><i class="bi bi-clock-history"></i> {{ clock_warnings[dv.id] }}</div>{% endif %}
-  {% if dv.last_error and not dv.online %}<div class="alert alert-danger py-2 small mb-3"><i class="bi bi-exclamation-triangle"></i> {{ dv.last_error }}
+  {% if dv.last_error and not dv.online and dv.active and not paused %}<div class="alert alert-danger py-2 small mb-3"><i class="bi bi-exclamation-triangle"></i> {{ dv.last_error }}
     {% if dv.active and dv.serial %}<div class="mt-1 text-body-secondary">Si cambiaste de red, el sistema lo busca solo cada 2 minutos por su número de serie. {% if can_edit %}También puedes {% if u.role == 'admin' %}pulsar <b>Buscar biométrico</b> arriba o {% endif %}escribir la IP nueva.{% endif %}</div>{% endif %}</div>{% endif %}
   <div class="d-flex flex-wrap gap-2">
-    {% if can_edit %}
+    {% if can_edit and paused and u.role != 'admin' %}
+    {% elif can_edit and not dv.active %}
+    <form method="post" action="/dispositivos/{{ dv.id }}/activar"><button class="btn btn-sm btn-primary"><i class="bi bi-power"></i> Volver a activar</button></form>
+    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#e{{ dv.id }}"><i class="bi bi-pencil"></i> Editar</button>
+    {% elif can_edit %}
     <form method="post" action="/dispositivos/{{ dv.id }}/probar"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-plug"></i> Probar</button></form>
     <form method="post" action="/dispositivos/{{ dv.id }}/hora" onsubmit="return confirm('Se pondrá en el equipo la hora de este servidor: {{ server_now() }}. ¿Es correcta?')"><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock"></i> Sincronizar hora</button></form>
     <form method="post" action="/dispositivos/{{ dv.id }}/eventos"><input type="hidden" name="dias" value="31"><button class="btn btn-sm btn-outline-secondary" title="Descargar las marcaciones de los últimos 31 días"><i class="bi bi-download"></i> Descargar historial</button></form>
@@ -86,8 +95,7 @@
       <button class="dropdown-item" data-bs-toggle="collapse" data-bs-target="#e{{ dv.id }}"><i class="bi bi-pencil me-2"></i>Editar</button>
       <form method="post" action="/dispositivos/{{ dv.id }}/reiniciar" onsubmit="return confirm('¿Reiniciar el equipo? Dejará de marcar ~1 minuto.')"><button class="dropdown-item"><i class="bi bi-bootstrap-reboot me-2"></i>Reiniciar equipo</button></form>
       <div class="dropdown-divider"></div>
-      {% if dv.active %}<form method="post" action="/dispositivos/{{ dv.id }}/eliminar" onsubmit="return confirm('¿Desactivar este equipo? El sistema dejará de leer sus marcas hasta que lo vuelvas a activar.')"><button class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Desactivar</button></form>
-      {% else %}<form method="post" action="/dispositivos/{{ dv.id }}/activar"><button class="dropdown-item"><i class="bi bi-power me-2"></i>Volver a activar</button></form>{% endif %}
+      <form method="post" action="/dispositivos/{{ dv.id }}/eliminar" onsubmit="return confirm('¿Desactivar este equipo? El sistema dejará de leer sus marcas hasta que lo vuelvas a activar.')"><button class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Desactivar</button></form>
     </div></div>
     {% endif %}
   </div>
