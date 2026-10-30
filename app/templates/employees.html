@@ -44,13 +44,14 @@
   </tbody></table></div>
 </div>
 
-<div class="modal fade" id="imp"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
-  <div class="modal-header"><h5 class="modal-title">Importar empleados</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+<div class="modal fade" id="imp" tabindex="-1" aria-labelledby="impT"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title" id="impT">Importar empleados</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button></div>
   <div class="modal-body">
     <h6 class="fw-semibold">Desde un equipo</h6><p class="small text-secondary">Trae a las personas que ya están registradas en el terminal. Quedan en el local del equipo.</p>
-    <form method="post" action="/empleados/importar-equipo" class="d-flex gap-2 mb-4">
-      <select name="device_id" class="form-select" required>{% for dv in devs %}<option value="{{ dv.id }}">{{ dv.name }} ({{ dv.host }})</option>{% else %}<option value="">Primero agrega un dispositivo</option>{% endfor %}</select>
+    {% if devs %}<form method="post" action="/empleados/importar-equipo" class="d-flex gap-2 mb-4">
+      <select name="device_id" class="form-select" required>{% for dv in devs %}<option value="{{ dv.id }}">{{ dv.name }} ({{ dv.host }})</option>{% endfor %}</select>
       <button class="btn btn-primary">Importar</button></form>
+    {% else %}<div class="alert alert-light small mb-4">Este local aún no tiene biométricos. Agrégalo en <a href="/dispositivos">Dispositivos</a>.</div>{% endif %}
     <h6 class="fw-semibold">Desde Excel (.xlsx)</h6><p class="small text-secondary">Columnas: <code>numero</code>, <code>nombre</code> y opcionales <code>documento</code>, <code>area</code> (o <code>departamento</code>), <code>cargo</code>, <code>email</code>, <code>telefono</code>.</p>
     <form method="post" action="/empleados/importar-excel" enctype="multipart/form-data" class="d-flex flex-wrap gap-2">
       {% if local_opts %}<select name="local_id" class="form-select" required aria-label="Local"><option value="">¿En qué local?</option>{% for lo in local_opts %}<option value="{{ lo.id }}">{{ lo.name }}</option>{% endfor %}</select>{% endif %}

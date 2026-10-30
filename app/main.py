@@ -392,7 +392,8 @@ async def employee_save(request: Request):
 
     def fail(msg):
         # vuelve a mostrar el formulario con lo que escribió (la foto hay que volver a elegirla)
-        flash(request, msg, "danger")
+        photo_in = any(getattr(f.get(k), "filename", "") for k in ("photo", "photo_cam")) or f.get("photo_data")
+        flash(request, msg + (" Vuelve a elegir la foto." if photo_in else ""), "danger")
         e = {k: f.get(k) for k in ("employee_no", "name", "document", "position", "email", "phone", "gender",
                                    "hire_date")}
         e.update(id=eid, active=1 if f.get("active") else 0, photo=old and old["photo"], face_at=old and old["face_at"],
@@ -497,7 +498,7 @@ def _flash_results(request, msg, res):
         if others:
             flash(request, f"También se actualizó en {len(others)} equipo(s) de otros locales.", "info")
     if not res:
-        flash(request, msg + " (Su local no tiene equipos activos.)", "warning")
+        flash(request, (msg + " " if msg else "") + "Su local no tiene equipos activos: no se envió a ningún biométrico.", "warning")
     for name, ok, m in res:
         flash(request, f"{msg} {name}: {m}", "success" if ok else "danger")
         msg = ""
@@ -507,6 +508,10 @@ def _flash_results(request, msg, res):
 async def employee_sync(request: Request, eid: int):
     u = user(request, "admin", "encargado")
     emp = _emp_visible(request, u, eid)
+    if not emp["active"]:
+        flash(request, "Está dado de baja: actívalo primero (casilla «Activo» y Guardar) para enviarlo a los equipos.",
+              "warning")
+        return back(f"/empleados/{eid}")
     _flash_results(request, "", await run_in_threadpool(devices.push_employee, emp))
     return back(f"/empleados/{eid}")
 
@@ -733,7 +738,7 @@ async def config_save(request: Request, what: str):
                   "danger")
             return back("/configuracion")
         if not all((f.get(k) or "0").isdigit() for k in ("tolerance_min", "lunch_min")):
-            flash(request, "La tolerancia y el almuerzo deben ser minutos (números enteros).", "danger")
+            flash(request, "La tolerancia y el refrigerio deben ser minutos (números enteros).", "danger")
             return back("/configuracion")
         days = ",".join(sorted(v for k, v in (await request.form()).multi_items() if k == "days" and v in "1234567"))
         if not days:
@@ -839,6 +844,9 @@ async def leave_save(request: Request):
             flash(request, "Ese permiso no existe.", "danger")
             return back("/permisos")
         db.ex("DELETE FROM leaves WHERE id=?", (f["delete"],))
+        db.audit(u["username"], "permisos", f"borró permiso {lv['kind']} {lv['date_from']}")
+        flash(request, "Permiso eliminado.")
+        return back("/permisos")
     elif f.get("employee_id") and not alcance.row(request, u, "employees", f["employee_id"]):
         flash(request, "Ese empleado no existe.", "danger")
         return back("/permisos")
@@ -1018,6 +1026,12 @@ def _devices_page(request, u, **ctx):
         if d["active"] and d["local_id"] is not None:
             per_local[(d["local_id"], d["local"])].append(d)
     compare_locals = [{"id": k[0], "name": k[1]} for k, v in per_local.items() if len(v) > 1]
+    if alcance.is_admin(u):
+        for d in devs:
+            if d.get("paused_other") and d["serial"]:
+                d["clash"] = db.q1("""SELECT d.name, l.name AS local FROM devices d LEFT JOIN locales l ON l.id=d.local_id
+                                       WHERE d.serial=? AND d.id<>? AND d.active=1 ORDER BY d.id LIMIT 1""",
+                                   (d["serial"], d["id"]))
     return render(request, "devices.html", u, devs=devs, can_edit=can_edit, compare_locals=compare_locals,
                   local_opts=alcance.choices(u) if can_edit else [],
                   default_local=alcance.default_local(request, u), **ctx)
@@ -1186,7 +1200,8 @@ async def device_save(request: Request):
         flash(request, f"Conectado a {info.get('deviceName') or dev['name']} — modelo {info.get('model')}, "
                        f"serie {info.get('serialNumber')}, firmware {info.get('firmwareVersion')}.")
     except ISAPIError as e:
-        flash(request, f"Dispositivo guardado, pero no responde: {e}", "warning")
+        flash(request, f"Dispositivo guardado, pero {'quedó pausado' if devices.OTHER_LOCAL in str(e) else 'no responde'}: {e}",
+              "warning")
     return back("/dispositivos")
 
 
@@ -1217,7 +1232,7 @@ async def device_action(request: Request, did: int, action: str):
             n = await run_in_threadpool(c.user_count)
             t = await run_in_threadpool(c.get_time)
             flash(request, f"En línea: {info.get('model')} (serie {info.get('serialNumber')}), {n} usuarios, "
-                           f"hora del equipo {t.get('localTime', '?')}.")
+                           f"hora del equipo {(t.get('localTime') or '?')[:19].replace('T', ' ')}.")
         elif action == "ip":
             f = await form(request)
             host, _, port = (f.get("host") or "").strip().partition(":")
@@ -1241,7 +1256,7 @@ async def device_action(request: Request, did: int, action: str):
             await run_in_threadpool(c.reboot)
             flash(request, f"{dev['name']} se está reiniciando.", "warning")
         elif action == "eliminar":
-            db.ex("UPDATE devices SET active=0 WHERE id=?", (did,))
+            db.ex("UPDATE devices SET active=0, online=0 WHERE id=?", (did,))
             devices.CLOCK_WARNINGS.pop(did, None)
             flash(request, "Dispositivo desactivado: ya no se leen sus marcas (su historial se conserva).", "warning")
         elif action == "activar":

@@ -24,11 +24,11 @@
 {% else %}<tr><td colspan="10" class="empty"><i class="bi bi-calendar-x"></i>Sin datos para este día.</td></tr>{% endfor %}
 </tbody></table></div></div>
 
-<div class="modal fade" id="manual"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><form method="post" action="/asistencia/manual">
-  <div class="modal-header"><h5 class="modal-title">Registrar marca manual</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+<div class="modal fade" id="manual" tabindex="-1" aria-labelledby="manualT"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><form method="post" action="/asistencia/manual">
+  <div class="modal-header"><h5 class="modal-title" id="manualT">Registrar marca manual</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button></div>
   <div class="modal-body">
     <p class="small text-secondary">Para olvidos o fallas del equipo. Queda registrada en la auditoría con tu usuario.</p>
-    <div class="mb-3"><label class="form-label">Empleado</label><select name="employee_id" class="form-select" required>{% for e in emps %}<option value="{{ e.id }}">{{ e.name }} ({{ e.employee_no }})</option>{% endfor %}</select></div>
+    <div class="mb-3"><label class="form-label">Empleado</label><select name="employee_id" class="form-select" required><option value="">Elige a la persona…</option>{% for e in emps %}<option value="{{ e.id }}">{{ e.name }} ({{ e.employee_no }})</option>{% endfor %}</select></div>
     <div class="row g-2 mb-3"><div class="col"><label class="form-label">Fecha</label><input type="date" name="date" value="{{ d }}" class="form-control" required></div>
       <div class="col"><label class="form-label">Hora</label><input type="time" name="time" class="form-control" required></div></div>
     <div class="mb-3"><label class="form-label">Tipo</label><select name="kind" class="form-select"><option value="checkIn">Entrada</option><option value="checkOut">Salida</option></select></div>

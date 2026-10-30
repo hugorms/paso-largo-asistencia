@@ -1,8 +1,8 @@
 {% extends "base.html" %}{% block title %}Empleado{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><div class="small"><a href="/empleados"><i class="bi bi-arrow-left"></i> Empleados</a></div><h1>{{ e.name if e.id else 'Nuevo empleado' }}</h1>{% if e.id %}<div class="sub">N° {{ e.employee_no }}</div>{% endif %}</div>
-  {% if e.id %}<div class="page-actions">
+  <div><div class="small"><a href="/empleados"><i class="bi bi-arrow-left"></i> Empleados</a></div><h1>{{ e.name if e.id else 'Nuevo empleado' }}</h1>{% if e.id %}<div class="sub">N° {{ e.employee_no }}{% if not e.active %} · <span class="badge text-bg-secondary">Dado de baja</span>{% endif %}</div>{% endif %}</div>
+  {% if e.id and e.active %}<div class="page-actions">
     <form method="post" action="/empleados/{{ e.id }}/sincronizar"><button class="btn btn-outline-secondary"><i class="bi bi-arrow-repeat"></i> Reenviar a equipos del local</button></form>
     {% if u.role in ['admin','encargado'] %}<form method="post" action="/empleados/{{ e.id }}/eliminar" onsubmit="return confirm('¿Dar de baja a {{ e.name }} y borrarlo de los equipos? Su historial de asistencia se conserva.')"><button class="btn btn-outline-danger"><i class="bi bi-person-dash"></i> Dar de baja</button></form>{% endif %}
   </div>{% endif %}
