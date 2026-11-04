@@ -123,5 +123,7 @@ El sistema se puede publicar con un túnel de Cloudflare sin abrir puertos en el
 - Por HTTPS la cookie de sesión va marcada `Secure`; en la red local (http) sigue funcionando igual.
 - Cabeceras de seguridad (no se puede meter en un iframe, CSP, sin caché de datos de empleados) y límite de 100 MB por subida.
 
+El túnel corre como servicio `tunel` en el mismo Compose de Dokploy (`servidor/docker-compose.dokploy.yml`), así arranca solo al prender el servidor igual que la app. Una sola vez: en Dokploy → Compose `asistencia` → Environment, poner `TUNNEL_TOKEN=<token>` (Cloudflare Zero Trust → Networks → Tunnels) y dar Desplegar. Si antes lo prendías a mano, apaga ese para que no queden dos. El token nunca se sube a GitHub.
+
 En el túnel publica **solo** el puerto 8000 (la asistencia). Nunca el 3000 (Dokploy) ni el 22 (SSH).
 Si un proxy cambia el nombre del sitio y los formularios dan «Solicitud rechazada», agrega el dominio en la variable `ORIGENES_PERMITIDOS` (ej. `asistencia.clubpasolargo.com.ve`).

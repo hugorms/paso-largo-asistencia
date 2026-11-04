@@ -17,3 +17,17 @@ services:
     volumes:
       # Base de datos, fotos y clave de sesión: fuera de la imagen, no se pierden al redesplegar
       - /home/paso_largo/paso-largo/datos:/data
+
+  # Túnel de Cloudflare: publica SOLO la app (:8000) en internet. Arranca solo al prender el servidor.
+  # La clave NO va en GitHub (repo público): en Dokploy → este Compose → Environment poner
+  #   TUNNEL_TOKEN=<token del túnel>   (Cloudflare Zero Trust → Networks → Tunnels → el túnel)
+  # En Cloudflare, el Public Hostname del túnel debe apuntar a HTTP localhost:8000 (nunca :3000 ni SSH).
+  # Sin token este contenedor solo reintenta y no afecta a la app.
+  tunel:
+    image: cloudflare/cloudflared:latest
+    container_name: paso-largo-tunel
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
