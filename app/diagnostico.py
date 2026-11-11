@@ -1,7 +1,7 @@
 """Diagnóstico del biométrico: prueba, con la clave guardada, cada consulta que hace el lector y dice
 cuál responde y cuál falla. Solo lee (no cambia nada en el equipo ni en la base de datos).
 
-En la app: Dispositivos → «…» → Diagnóstico.   En el servidor: docker exec paso-largo python3 -m app.diagnostico
+En la app: botón «Probar» de cada equipo.   En el servidor: docker exec paso-largo python3 -m app.diagnostico
 """
 from datetime import datetime, timedelta
 
