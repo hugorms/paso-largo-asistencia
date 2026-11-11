@@ -27,6 +27,15 @@ class ISAPIConnError(ISAPIError):
     """El equipo no responde en esa IP (apagado, desconectado o cambió de IP)."""
 
 
+class ISAPIAuthError(ISAPIError):
+    """El equipo responde pero rechaza el usuario/clave (401). Ojo: cada intento fallido cuenta y, tras
+    varios, el equipo bloquea el usuario un rato (también para la clave correcta)."""
+
+    def __init__(self, msg, locked=False):
+        super().__init__(msg)
+        self.locked = locked
+
+
 class ISAPIClient:
     def __init__(self, host, user, password, port=80, https=False, timeout=20.0):
         scheme = "https" if https else "http"
@@ -48,7 +57,12 @@ class ISAPIClient:
         except httpx.HTTPError as e:
             raise ISAPIConnError(f"No se pudo conectar con el equipo: {e}") from e
         if r.status_code == 401:
-            raise ISAPIError("Usuario o contraseña del equipo incorrectos (401)")
+            body = (r.text or "").lower()
+            if "lock" in body:  # p. ej. <lockStatus>lock</lockStatus>, "userLocked", retryLoginTime/unlockTime
+                raise ISAPIAuthError("El equipo bloqueó el usuario por muchos intentos con clave equivocada (401). "
+                                     "Se desbloquea solo en unos 30 minutos", locked=True)
+            raise ISAPIAuthError("Usuario o contraseña del equipo incorrectos (401), o el equipo bloqueó el usuario "
+                                 "un rato por intentos fallidos")
         if r.status_code >= 400:
             raise ISAPIError(f"El equipo respondió {r.status_code}: {_error_text(r)}")
         return r
@@ -210,6 +224,8 @@ class _Stream:
         r = self.cm.__enter__()
         if r.status_code >= 400:
             self.__exit__(None, None, None)
+            if r.status_code == 401:
+                raise ISAPIAuthError("alertStream: usuario o clave rechazados (401)")
             raise ISAPIError(f"alertStream respondió {r.status_code}")
         return r
 

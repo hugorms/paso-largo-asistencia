@@ -18,7 +18,18 @@ except ImportError:
     pass
 
 from . import db, discovery
-from .isapi import MINOR_FAIL, ISAPIClient, ISAPIConnError, ISAPIError
+from .isapi import MINOR_FAIL, ISAPIAuthError, ISAPIClient, ISAPIConnError, ISAPIError
+
+# Los equipos Hikvision bloquean el usuario (unos 30 min) tras varios intentos con clave equivocada, y mientras
+# tanto rechazan también la clave buena. Por eso, cuando un equipo rechaza una clave en una IP, el sistema no la
+# vuelve a probar solo en esa IP por un buen rato: (id_equipo, ip) -> cuándo la rechazó.
+AUTH_FAILED = {}
+AUTH_RETRY_SEARCH = 6 * 3600  # búsqueda automática en la red: probar la clave de un equipo en IPs ajenas
+AUTH_RETRY_OWN = 600          # lector de marcas: el equipo en su propia IP (menos de 3 intentos por bloqueo)
+
+
+def auth_failed_recently(did, ip, within=AUTH_RETRY_SEARCH):
+    return time.time() - AUTH_FAILED.get((did, (ip or "").lower()), 0) < within
 
 log = logging.getLogger("asistencia")
 
@@ -58,6 +69,7 @@ def refresh_info(dev):
             c.execute("""UPDATE devices SET online=1, last_seen=?, last_error=NULL, paused_other=0, model=?, serial=?, firmware=?, mac=?
                          WHERE id=?""", (_now(), info.get("model"), info.get("serialNumber"),
                                          info.get("firmwareVersion"), info.get("macAddress"), dev["id"]))
+            AUTH_FAILED.pop((dev["id"], (dev["host"] or "").lower()), None)
             # si este mismo equipo ya estaba registrado con otra IP, se une a ese registro
             db.merge_same_serial(c)
         return info
@@ -67,17 +79,25 @@ def refresh_info(dev):
 
 
 # ------------------------------------------------------------------ cambio de red / de IP
-def _try_at(dev, host, ports):
+def _try_at(dev, host, ports, auto=False):
     """Prueba la clave guardada del equipo en host con varias combinaciones (puerto, https).
-    Devuelve (puerto, https, info) del primero que responde."""
+    Devuelve (puerto, https, info) del primero que responde.
+    auto: búsqueda automática; si esa IP ya rechazó esta clave hace poco, ni se intenta (cada intento
+    fallido acerca al equipo a bloquear el usuario)."""
+    key = (dev["id"], host.strip().lower())
+    if auto and auth_failed_recently(*key):
+        raise ISAPIAuthError(f"En {host} ya se rechazó la clave de «{dev['name']}» hace poco; no se reintenta")
     err = None
     for port, https in dict.fromkeys(ports):
         try:
-            return port, https, ISAPIClient(host, dev["username"], dev["password"], port, https,
-                                            timeout=6).device_info()
+            info = ISAPIClient(host, dev["username"], dev["password"], port, https, timeout=6).device_info()
+            AUTH_FAILED.pop(key, None)
+            return port, https, info
         except ISAPIConnError as e:
             err = err or e
         except ISAPIError as e:  # responde, pero p. ej. clave incorrecta: ese mensaje es el útil
+            if isinstance(e, ISAPIAuthError):
+                AUTH_FAILED[key] = time.time()
             err = e
             break
     raise err or ISAPIConnError("No se pudo conectar con el equipo")
@@ -127,9 +147,18 @@ def _ports_for(dev, cand):
     return [(dev["port"] or 80, bool(dev["https"])), (cand["port"], cand["https"]), (443, True), (80, False)]
 
 
-def relocate(dev, found=None):
+def _hosts_of_others(dev):
+    """IPs que son de OTROS equipos ya registrados (con serie conocida): ahí no se prueba la clave de dev.
+    Si no, un equipo apagado o de otro local probaría su clave en el biométrico de al lado cada vez que se lo
+    busca, y ese biométrico terminaría bloqueando el usuario (401) aunque su propia clave esté bien."""
+    return {(d["host"] or "").lower() for d in db.q("SELECT host, serial, mac FROM devices WHERE id<>?", (dev["id"],))
+            if (d["serial"] or d["mac"]) and not discovery.same_device(dev["serial"], dev["mac"], d["serial"], d["mac"])}
+
+
+def relocate(dev, found=None, auto=False):
     """El equipo no responde en su IP: lo busca en la red por número de serie (SADP) o probando su clave en
-    los equipos ISAPI de la subred, y si lo encuentra en otra IP la actualiza. Devuelve (nueva_ip|None, nota)."""
+    los equipos ISAPI de la subred, y si lo encuentra en otra IP la actualiza. Devuelve (nueva_ip|None, nota).
+    auto: la búsqueda la lanzó el lector solo (no se reintenta una clave ya rechazada en esa IP)."""
     if not (dev["serial"] or dev["mac"]):
         return None, "No se puede buscar solo: el equipo nunca se conectó (no se conoce su número de serie)."
     if found is None:
@@ -138,14 +167,16 @@ def relocate(dev, found=None):
         if not any(discovery.same_device(dev["serial"], dev["mac"], f["serial"], f["mac"]) for f in found):
             found = discovery.find(ports={80, 443, dev["port"] or 80})
     nets = ", ".join(str(n) for n in discovery.networks()) or "ninguna (¿la PC está conectada?)"
-    seen_at = None
+    seen_at, others = None, _hosts_of_others(dev)
     for f in found:
         if f["serial"] or f["mac"]:
             if not discovery.same_device(dev["serial"], dev["mac"], f["serial"], f["mac"]):
                 continue
             seen_at = f
+        elif f["ip"].lower() in others:
+            continue  # es otro biométrico ya registrado: no se le prueba esta clave
         try:
-            port, https, info = _try_at(dev, f["ip"], _ports_for(dev, f))
+            port, https, info = _try_at(dev, f["ip"], _ports_for(dev, f), auto=auto)
         except ISAPIError:
             continue
         if _is_same(dev, info):
@@ -173,9 +204,12 @@ def search_network():
     found = discovery.find(ports={80, 443} | {d["port"] for d in devs if d["port"]})
     for f in found:
         if not f["serial"]:  # del barrido: con la clave de algún equipo registrado se sabe cuál es
-            for d in devs:
+            # si esa IP ya es de un equipo registrado, solo se prueba la clave de ese (no la de todos:
+            # cada clave equivocada cuenta como intento fallido y el equipo termina bloqueando el usuario)
+            mine = [d for d in devs if (d["host"] or "").lower() == f["ip"].lower()]
+            for d in mine or devs:
                 try:
-                    _, _, info = _try_at(d, f["ip"], [(f["port"], f["https"])])
+                    _, _, info = _try_at(d, f["ip"], [(f["port"], f["https"])], auto=not mine)
                 except ISAPIError:
                     continue
                 f.update(serial=info.get("serialNumber") or "", mac=info.get("macAddress") or "",
@@ -624,7 +658,7 @@ class Poller(threading.Thread):
     def _quick_pull(self):
         """El equipo avisó una marca: solo se descargan los últimos minutos, sin tareas de mantenimiento."""
         for dev in db.q(POLLED):
-            if self.fails.get(dev["id"]):
+            if self.fails.get(dev["id"]) or auth_failed_recently(dev["id"], dev["host"], AUTH_RETRY_OWN):
                 continue  # un equipo caído no debe demorar las marcas del otro; lo revisa la vuelta normal
             try:
                 n = pull_events(dev, quick=True)
@@ -654,7 +688,7 @@ class Poller(threading.Thread):
         did = dev["id"]
         log.info("%s: no responde en %s, buscándolo en la red…", dev["name"], dev["host"])
         try:
-            moved, note = relocate(dev)
+            moved, note = relocate(dev, auto=True)
         except Exception as e:
             log.exception("Error buscando %s en la red", dev["name"])
             moved, note = None, f"No se pudo buscar en la red: {e}"
@@ -698,6 +732,8 @@ class Poller(threading.Thread):
             devs = db.q(POLLED)
             self._ensure_listeners(devs)
             for dev in devs:
+                if auth_failed_recently(dev["id"], dev["host"], AUTH_RETRY_OWN):
+                    continue  # rechazó la clave: se espera 10 min (o a «Probar») para no hacerle bloquear el usuario
                 try:
                     if time.time() - self.clock_checked.get(dev["id"], 0) > 600:
                         self.clock_checked[dev["id"]] = time.time()
@@ -718,8 +754,19 @@ class Poller(threading.Thread):
                         log.info("%s: volvió a responder en %s", dev["name"], dev["host"])
                         self._reconnected(dev["id"])
                 except ISAPIError as e:
-                    db.ex("UPDATE devices SET online=0, last_error=? WHERE id=?",
-                          (". ".join(filter(None, [str(e), self.notes.get(dev["id"])])), dev["id"]))
+                    if isinstance(e, ISAPIAuthError):
+                        # El equipo SÍ está en su IP (responde), así que no se lo busca en la red ni se muestra
+                        # la nota de una búsqueda anterior («no apareció»), que confundía.
+                        AUTH_FAILED[(dev["id"], (dev["host"] or "").lower())] = time.time()
+                        self.notes.pop(dev["id"], None)
+                        self.fails.pop(dev["id"], None)
+                        self.down_since.pop(dev["id"], None)
+                        self.clock_checked.pop(dev["id"], None)  # al volver, se revisa todo enseguida
+                        msg = (f"{e}. Se reintenta solo cada 10 min. Revisa la clave en Editar o pulsa «Probar» "
+                               "cuando pasen unos 30 min (probar muchas veces seguidas alarga el bloqueo)")
+                    else:
+                        msg = ". ".join(filter(None, [str(e), self.notes.get(dev["id"])]))
+                    db.ex("UPDATE devices SET online=0, last_error=? WHERE id=?", (msg, dev["id"]))
                     if isinstance(e, ISAPIConnError):
                         self._relocate(dev, e)
                 except Exception as e:  # nunca dejar morir el hilo
@@ -752,6 +799,11 @@ class AlertListener(threading.Thread):
                                                                 and b"videoloss" not in low):
                             self.wake.set()
                         buf = self._parse(buf + chunk)
+            except ISAPIAuthError as e:
+                # clave rechazada: reintentar cada 10 s haría que el equipo bloquee el usuario
+                log.info("alertStream %s: %s", self.dev["name"], e)
+                self.stop.wait(600)
+                continue
             except Exception as e:
                 log.debug("alertStream %s: %s", self.dev["name"], e)
             self.stop.wait(10)
