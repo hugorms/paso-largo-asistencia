@@ -1261,11 +1261,19 @@ async def device_action(request: Request, did: int, action: str):
                       "danger")
                 return back("/dispositivos")
         if action == "probar":
-            info = await run_in_threadpool(devices.refresh_info, dev)
-            n = await run_in_threadpool(c.user_count)
-            t = await run_in_threadpool(c.get_time)
-            flash(request, f"En línea: {info.get('model')} (serie {info.get('serialNumber')}), {n} usuarios, "
-                           f"hora del equipo {(t.get('localTime') or '?')[:19].replace('T', ' ')}.")
+            # «Probar» revisa una por una las consultas que hace el lector y dice cuál acepta el equipo y cuál no
+            from . import diagnostico
+            try:
+                await run_in_threadpool(devices.refresh_info, dev)
+            except ISAPIError as e:
+                if devices.OTHER_LOCAL in str(e):
+                    raise
+            res = await run_in_threadpool(diagnostico.run, dev)
+            ok = all(r for r, _ in res)
+            if ok:
+                poller.wake.set()
+            flash(request, f"{dev['name']}: " + " · ".join(("✔ " if r else "✖ FALLA ") + txt for r, txt in res),
+                  "success" if ok else "warning")
         elif action == "ip":
             f = await form(request)
             host, _, port = (f.get("host") or "").strip().partition(":")
