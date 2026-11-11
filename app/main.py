@@ -1276,6 +1276,11 @@ async def device_action(request: Request, did: int, action: str):
             poller.wake.set()
             flash(request, f"Conectado: {dev['name']} ahora está en {host.lower()} "
                            f"({info.get('model')}, serie {info.get('serialNumber')}).")
+        elif action == "diagnostico":
+            from . import diagnostico
+            res = await run_in_threadpool(diagnostico.run, dev)
+            flash(request, f"Diagnóstico de {dev['name']}: " + " · ".join(
+                ("✔ " if ok else "✖ FALLA ") + txt for ok, txt in res), "info" if all(ok for ok, _ in res) else "warning")
         elif action == "hora":
             await run_in_threadpool(c.set_time, datetime.now(), devices.local_offset())
             devices.CLOCK_WARNINGS.pop(did, None)
