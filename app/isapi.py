@@ -3,6 +3,7 @@
 Todas las llamadas usan autenticación Digest, que es la que exigen estos equipos.
 """
 import json
+import re
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -42,15 +43,25 @@ class ISAPIClient:
         scheme = "https" if https else "http"
         default = 443 if https else 80
         self.base = f"{scheme}://{host}" + ("" if int(port) == default else f":{port}")
-        self.auth = httpx.DigestAuth(user, password)
+        self.user, self.password = user, password
         self.timeout = httpx.Timeout(timeout, connect=5.0)  # si no está en la red se sabe rápido
         self.verify = False  # los equipos usan certificados autofirmados
 
     # ------------------------------------------------------------ helpers
+    def _auth(self):
+        # Una autenticación Digest NUEVA en cada petición: si se reutiliza el "nonce" de la anterior, algunos
+        # firmwares (p. ej. DS-K1T343MWX V4.38) responden 401 <userCheck> SIN pedir de nuevo la clave, y la
+        # petición falla aunque la clave esté bien (pasaba con la 2.ª página de marcas/usuarios y con las fotos).
+        return httpx.DigestAuth(self.user, self.password)
+
     def _req(self, method, path, **kw):
         try:
-            with httpx.Client(auth=self.auth, timeout=self.timeout, verify=self.verify) as c:
-                r = c.request(method, self.base + path, **kw)
+            for intento in range(2):
+                with httpx.Client(auth=self._auth(), timeout=self.timeout, verify=self.verify) as c:
+                    r = c.request(method, self.base + path, **kw)
+                if r.status_code != 401 or "www-authenticate" in r.headers or intento:
+                    break
+                # 401 sin desafío: el equipo descartó la sesión; se reintenta una vez desde cero
         except httpx.TimeoutException as e:
             raise ISAPIConnError("El equipo no respondió a tiempo (¿apagado o fuera de la red?)") from e
         except httpx.ConnectError as e:
@@ -60,7 +71,7 @@ class ISAPIClient:
         if r.status_code == 401:
             body = (r.text or "").lower()
             detail = " ".join(f"{_error_text(r)} | pide: {r.headers.get('www-authenticate', '-')}".split())[:300]
-            if "lock" in body:  # p. ej. <lockStatus>lock</lockStatus>, "userLocked", retryLoginTime/unlockTime
+            if re.search(r"<lockstatus>\s*lock\s*<|userlocked|\"lockstatus\"\s*:\s*\"lock\"", body):  # p. ej. <lockStatus>lock</lockStatus>, "userLocked", retryLoginTime/unlockTime
                 raise ISAPIAuthError("El equipo bloqueó el usuario por muchos intentos con clave equivocada (401). "
                                      "Se desbloquea solo en unos 30 minutos", locked=True, detail=detail)
             raise ISAPIAuthError("Usuario o contraseña del equipo incorrectos (401), o el equipo bloqueó el usuario "
@@ -201,7 +212,7 @@ class ISAPIClient:
 
     def stream(self, path):
         """Abre una conexión larga (alertStream). Usar como context manager."""
-        client = httpx.Client(auth=self.auth, verify=self.verify,
+        client = httpx.Client(auth=self._auth(), verify=self.verify,
                               timeout=httpx.Timeout(10.0, read=120.0))
         return _Stream(client, client.stream("GET", self.base + path))
 
