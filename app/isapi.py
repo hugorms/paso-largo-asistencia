@@ -31,9 +31,10 @@ class ISAPIAuthError(ISAPIError):
     """El equipo responde pero rechaza el usuario/clave (401). Ojo: cada intento fallido cuenta y, tras
     varios, el equipo bloquea el usuario un rato (también para la clave correcta)."""
 
-    def __init__(self, msg, locked=False):
+    def __init__(self, msg, locked=False, detail=""):
         super().__init__(msg)
         self.locked = locked
+        self.detail = detail  # lo que respondió el equipo (para el diagnóstico de «Probar»)
 
 
 class ISAPIClient:
@@ -58,11 +59,12 @@ class ISAPIClient:
             raise ISAPIConnError(f"No se pudo conectar con el equipo: {e}") from e
         if r.status_code == 401:
             body = (r.text or "").lower()
+            detail = " ".join(f"{_error_text(r)} | pide: {r.headers.get('www-authenticate', '-')}".split())[:300]
             if "lock" in body:  # p. ej. <lockStatus>lock</lockStatus>, "userLocked", retryLoginTime/unlockTime
                 raise ISAPIAuthError("El equipo bloqueó el usuario por muchos intentos con clave equivocada (401). "
-                                     "Se desbloquea solo en unos 30 minutos", locked=True)
+                                     "Se desbloquea solo en unos 30 minutos", locked=True, detail=detail)
             raise ISAPIAuthError("Usuario o contraseña del equipo incorrectos (401), o el equipo bloqueó el usuario "
-                                 "un rato por intentos fallidos")
+                                 "un rato por intentos fallidos", detail=detail)
         if r.status_code >= 400:
             raise ISAPIError(f"El equipo respondió {r.status_code}: {_error_text(r)}")
         return r

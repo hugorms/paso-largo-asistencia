@@ -8,6 +8,24 @@ from datetime import datetime, timedelta
 from . import db, devices
 
 
+def _err(e):
+    d = getattr(e, "detail", "")
+    return f"{e} [el equipo dice: {d}]" if d else str(e)
+
+
+def _total(c):
+    d = c._json("POST", "/ISAPI/AccessControl/AcsEventTotalNum?format=json",
+                {"AcsEventTotalNumCond": {"major": 0, "minor": 0}})
+    return f"{(d.get('AcsEventTotalNum') or {}).get('totalNum', '?')} en el equipo"
+
+
+def _one(c, desde, hasta):
+    d = c._json("POST", "/ISAPI/AccessControl/AcsEvent?format=json", {"AcsEventCond": {
+        "searchID": "diag1", "searchResultPosition": 0, "maxResults": 1, "major": 0, "minor": 0,
+        "startTime": desde, "endTime": hasta}})
+    return f"{(d.get('AcsEvent') or {}).get('totalMatches', '?')} encontradas"
+
+
 def run(dv):
     """Devuelve una lista de (ok, texto) con el resultado de cada consulta."""
     tz = devices.local_offset()
@@ -20,13 +38,15 @@ def run(dv):
         ("datos del equipo", lambda: c.device_info().get("model")),
         ("hora del equipo", lambda: (c.get_time().get("localTime") or "")[:19].replace("T", " ")),
         ("usuarios y rostros", lambda: f"{len(c.search_users())} usuarios"),
+        ("cantidad de marcas guardadas", lambda: _total(c)),
         ("marcas de las últimas 6 h", lambda: f"{len(c.search_events(desde, hasta))} marcas"),
+        ("última marca (consulta mínima)", lambda: _one(c, desde, hasta)),
     ]
     for nombre, f in pasos:
         try:
             out.append((True, f"{nombre}: {f()}"))
         except Exception as e:
-            out.append((False, f"{nombre}: {e}"))
+            out.append((False, f"{nombre}: {_err(e)}"))
             if nombre == "datos del equipo" and "401" in str(e):
                 return out  # sin acceso: no se insiste (cada intento fallido acerca el bloqueo)
     ev = db.q1("SELECT picture_url FROM events WHERE device_id=? AND picture_url IS NOT NULL "
@@ -35,7 +55,7 @@ def run(dv):
         try:
             out.append((True, f"foto de marca: {len(c.fetch_picture(ev['picture_url']))} bytes"))
         except Exception as e:
-            out.append((False, f"foto de marca: {e}"))
+            out.append((False, f"foto de marca: {_err(e)}"))
     else:
         out.append((True, "foto de marca: ninguna marca guardada tiene foto"))
     return out
