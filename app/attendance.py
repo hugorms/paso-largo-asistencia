@@ -66,33 +66,37 @@ def parse_date(s, default=None):
 
 def pick_marks(ms, e, d: date, now: datetime, min_gap: timedelta):
     """Entrada = primera marca del día y salida = la última. Las marcas del medio no cuentan.
-    ms: lista de (hora, tipo 'in'|'out'|'any', es_manual). Devuelve (entrada, salida, marcas_que_no_cuentan)."""
-    ins = [t for t, k, _ in ms if k in ("in", "any")]
-    outs = [t for t, k, _ in ms if k in ("out", "any")]
+    ms: lista de (hora, tipo 'in'|'out'|'any', es_manual) o (hora, tipo, es_manual, firme).
+    firme=False: el tipo lo eligió la persona en el terminal (o el equipo lo puso solo). Eso NO cambia cuál es la primera
+    y la última marca (basta olvidar tocar «Salida» para perder la salida); solo decide qué es una marca sola.
+    Devuelve (entrada, salida, marcas_que_no_cuentan)."""
+    ms = [(m[0], m[1], m[2]) + ((m[3],) if len(m) > 3 else (True,)) for m in ms]
+    ins = [t for t, k, _, firm in ms if k in ("in", "any") or not firm]
+    outs = [t for t, k, _, firm in ms if k in ("out", "any") or not firm]
     entry = min(ins) if ins else None
     exit_ = max(outs) if outs else None
     if entry and exit_ and (exit_ == entry or exit_ - entry < min_gap):
         # En realidad es una sola marca (o dos seguidas): las ventanas dicen si fue entrada o salida
-        forced = {k for t, k, _ in ms if entry <= t <= exit_} - {"any"}
+        forced = {k for t, k, *_ in ms if entry <= t <= exit_} - {"any"}
         kind = forced.pop() if len(forced) == 1 else side(entry, e)
         if kind == "in":
             exit_ = None
         else:
             entry = None
-    if exit_ and not entry and side(exit_, e) == "in" and all(k == "any" for t, k, _ in ms if t == exit_):
+    if exit_ and not entry and side(exit_, e) == "in" and all(k == "any" for t, k, *_ in ms if t == exit_):
         entry, exit_ = exit_, None
     # Hoy, antes de la hora de salida, una marca del medio (p. ej. a las 12:00) aún no es la salida
     if (exit_ and d == now.date() and e.get("end_time") and now < _t(d, e["end_time"]) and e.get("out_from")
             and not in_window(exit_, e["out_from"], e["out_to"])
-            and not any(t == exit_ and (man or k == "out") for t, k, man in ms)):
+            and not any(t == exit_ and (man or k == "out") for t, k, man, _ in ms)):
         exit_ = None
     # Una marca repetida dentro de la ventana de entrada (p. ej. 08:00 y 08:03) no es la salida, cualquier día
     if (exit_ and entry and e.get("in_from") and in_window(exit_, e["in_from"], e["in_to"])
             and not in_window(exit_, e.get("out_from"), e.get("out_to"))
-            and not any(t == exit_ and (man or k == "out") for t, k, man in ms)):
+            and not any(t == exit_ and (man or (k == "out" and firm)) for t, k, man, firm in ms)):
         exit_ = None
     used = {entry, exit_}
-    outside = sum(1 for t, k, man in ms if t not in used and not man
+    outside = sum(1 for t, k, man, _ in ms if t not in used and not man
                   and not in_window(t, e.get("in_from"), e.get("in_to"))
                   and not in_window(t, e.get("out_from"), e.get("out_to")))
     return entry, exit_, outside
@@ -153,13 +157,16 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
         t = datetime.fromisoformat(ev["event_time"])
         manual = ev["source"] == "manual"
         st = (ev["attendance_status"] or "").lower() if manual or ev["device_id"] in trusts_status else ""
+        # firme: marca manual o equipo configurado como solo entrada/salida. Lo que se tocó en el terminal es solo
+        # una pista (ver pick_marks).
+        firm = True
         if st in ("checkin", "breakin", "overtimein"):
-            kind = "in"
+            kind, firm = "in", manual
         elif st in ("checkout", "breakout", "overtimeout"):
-            kind = "out"
+            kind, firm = "out", manual
         else:
             kind = {"entrada": "in", "salida": "out"}.get(devices.get(ev["device_id"]), "any")
-        marks[(ev["employee_no"], t.date())].append((t, kind, manual))
+        marks[(ev["employee_no"], t.date())].append((t, kind, manual, firm))
         dev_local, sede = sedes.get(ev["device_id"], (None, None))
         if sede:
             trail[(ev["employee_no"], t.date())].append((t, sede))
