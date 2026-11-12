@@ -1,8 +1,10 @@
 """Cálculo de asistencia a partir de las marcaciones del equipo."""
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from . import db
+
+NIGHT_UNTIL = 5  # hora: una marca antes de esta, de quien marcó el día anterior, es su salida de ese día
 
 STATUS_COLORS = {
     "Puntual": "success", "Tarde": "warning", "Ausente": "danger", "Justificado": "info",
@@ -150,11 +152,24 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
     marks = defaultdict(list)
     nos = [e["employee_no"] for e in emps]
     ph = ",".join("?" * len(nos))
-    for ev in db.q(f"""SELECT employee_no, event_time, device_id, attendance_status, source FROM events
-                       WHERE valid=1 AND employee_no IN ({ph}) AND event_time >= ? AND event_time < ?
-                       ORDER BY event_time""",
-                   nos + [start.isoformat(), (end + timedelta(days=1)).isoformat()]):
+    # Se trae un día antes y la madrugada del día siguiente: quien sale pasada la medianoche (ver `day` abajo)
+    evs = db.q(f"""SELECT employee_no, event_time, device_id, attendance_status, source FROM events
+                   WHERE valid=1 AND employee_no IN ({ph}) AND event_time >= ? AND event_time < ?
+                   ORDER BY event_time""",
+               nos + [(start - timedelta(days=1)).isoformat(),
+                      datetime.combine(end + timedelta(days=1), time(NIGHT_UNTIL)).isoformat()])
+    in_from = {e["employee_no"]: e["in_from"] for e in emps}
+    worked = {(ev["employee_no"], ev["event_time"][:10]) for ev in evs if int(ev["event_time"][11:13]) >= NIGHT_UNTIL}
+    for ev in evs:
         t = datetime.fromisoformat(ev["event_time"])
+        day = t.date()
+        # Una marca de madrugada (antes de las 5:00) es la salida del día anterior si ese día marcó y la madrugada
+        # no es su hora de entrada. Si nadie trabaja pasada la medianoche, esto nunca pasa y nada cambia.
+        if (t.hour < NIGHT_UNTIL and (ev["employee_no"], (day - timedelta(days=1)).isoformat()) in worked
+                and not (in_from.get(ev["employee_no"]) and t.strftime("%H:%M") >= in_from[ev["employee_no"]])):
+            day -= timedelta(days=1)
+        if not start <= day <= end:
+            continue
         manual = ev["source"] == "manual"
         st = (ev["attendance_status"] or "").lower() if manual or ev["device_id"] in trusts_status else ""
         # firme: marca manual o equipo configurado como solo entrada/salida. Lo que se tocó en el terminal es solo
@@ -166,12 +181,12 @@ def compute(start: date, end: date, employee_id=None, department_id=None, now=No
             kind, firm = "out", manual
         else:
             kind = {"entrada": "in", "salida": "out"}.get(devices.get(ev["device_id"]), "any")
-        marks[(ev["employee_no"], t.date())].append((t, kind, manual, firm))
+        marks[(ev["employee_no"], day)].append((t, kind, manual, firm))
         dev_local, sede = sedes.get(ev["device_id"], (None, None))
         if sede:
-            trail[(ev["employee_no"], t.date())].append((t, sede))
+            trail[(ev["employee_no"], day)].append((t, sede))
         if dev_local and home.get(ev["employee_no"]) and home[ev["employee_no"]] != dev_local:
-            away[(ev["employee_no"], t.date())].add(sede)
+            away[(ev["employee_no"], day)].add(sede)
 
     holidays = {h["date"]: h["name"] for h in db.q("SELECT date, name FROM holidays WHERE date BETWEEN ? AND ?",
                                                    (start.isoformat(), end.isoformat()))}
