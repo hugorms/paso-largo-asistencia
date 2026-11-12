@@ -44,8 +44,11 @@ porque es la que lee las marcaciones cada 10 segundos.
   Las marcas del medio (por ejemplo al almorzar) quedan en *Marcaciones* pero no cuentan.
 - Si alguien marca una sola vez, las *ventanas* del horario dicen si fue entrada o salida.
   Las ventanas se mueven solas al cambiar la hora de entrada o salida del horario.
-- Si el equipo está configurado como *solo entrada* o *solo salida*, o si el empleado elige Entrada/Salida en el terminal, se respeta
-  (salvo que el equipo marque todo como "Entrada": entonces se ignora ese dato).
+- Si el equipo está configurado como *solo entrada* o *solo salida*, o la marca es manual, se respeta.
+- Lo que el empleado toca en el terminal (Entrada/Salida) solo sirve para saber qué fue una marca sola: con dos marcas
+  o más, la primera sigue siendo la entrada y la última la salida (olvidar tocar «Salida» no hace perder la salida).
+- Quien sale pasada la medianoche: una marca antes de las 5:00 cuenta como salida del día anterior si ese día marcó
+  (salvo que su horario empiece de madrugada). Si nadie trabaja hasta tan tarde, no cambia nada.
 - Las marcas manuales se pueden borrar desde *Marcaciones* (queda en la auditoría).
 - Tardanza = entrada después de *hora de inicio + tolerancia*. Se reportan los minutos desde la hora de inicio.
 - El refrigerio se descuenta de las horas trabajadas cuando la jornada supera 5 horas.
